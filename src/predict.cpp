@@ -1,4 +1,4 @@
-#include "isotree.h" 
+#include "isotree.h"
 
 
 /*    Isolation forests and variations thereof, with adjustments for incorporation

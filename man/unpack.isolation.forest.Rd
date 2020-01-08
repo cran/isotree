@@ -19,7 +19,7 @@ underlying C++ objects that constitute the isolation forest model and which live
 thus not restored after loading a saved model through `readRDS` or `load`.
 
 The model object however keeps serialized versions of the C++ objects as raw bytes, from which the C++ objects can be
-reconstructed, and are done so automatically after calling `predict`, `print`, `summary`, or `add_isolation_tree` on the
+reconstructed, and are done so automatically after calling `predict`, `print`, `summary`, or `add.isolation.tree` on the
 freshly-loaded object from `readRDS` or `load`.
 
 But due to R's environments system (as opposed to other systems such as Python which can use pass-by-reference), they will
@@ -38,7 +38,7 @@ in the same way as `predict` or `print`, but without producing any outputs or me
 library(isotree)
 set.seed(1)
 X <- matrix(rnorm(100), nrow = 20)
-iso <- isolation.forest(X)
+iso <- isolation.forest(X, nthreads = 1)
 temp_file <- file.path(tempdir(), "iso.Rds")
 saveRDS(iso, temp_file)
 iso2 <- readRDS(temp_file)
