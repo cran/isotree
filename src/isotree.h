@@ -148,14 +148,14 @@
 
 
 /* Types used through the package */
-typedef enum  NewCategAction {Weighted, Smallest, Random}  NewCategAction; /* Weighted means Impute in the extended model */
-typedef enum  MissingAction  {Divide,   Impute,   Fail}    MissingAction;  /* Divide is only for non-extended model */
-typedef enum  ColType        {Numeric,  Categorical}       ColType;
-typedef enum  CategSplit     {SubSet,   SingleCateg}       CategSplit;
-typedef enum  GainCriterion  {Averaged, Pooled,   NoCrit}  Criterion;      /* For guided splits */
-typedef enum  CoefType       {Uniform,  Normal}            CoefType;       /* For extended model */
-typedef enum  UseDepthImp    {Lower,    Higher,   Same}    UseDepthImp;    /* For NA imputation */
-typedef enum  WeighImpRows   {Inverse,  Prop,     Flat}    WeighImpRows;   /* For NA imputation */
+typedef enum  NewCategAction {Weighted, Smallest, Random}      NewCategAction; /* Weighted means Impute in the extended model */
+typedef enum  MissingAction  {Divide,   Impute,   Fail}        MissingAction;  /* Divide is only for non-extended model */
+typedef enum  ColType        {Numeric,  Categorical, NotUsed}  ColType;
+typedef enum  CategSplit     {SubSet,   SingleCateg}           CategSplit;
+typedef enum  GainCriterion  {Averaged, Pooled,   NoCrit}      Criterion;      /* For guided splits */
+typedef enum  CoefType       {Uniform,  Normal}                CoefType;       /* For extended model */
+typedef enum  UseDepthImp    {Lower,    Higher,   Same}        UseDepthImp;    /* For NA imputation */
+typedef enum  WeighImpRows   {Inverse,  Prop,     Flat}        WeighImpRows;   /* For NA imputation */
 
 /* Notes about new categorical action:
 *  - For single-variable case, if using 'Smallest', can then pass data at prediction time
@@ -170,7 +170,7 @@ typedef enum  WeighImpRows   {Inverse,  Prop,     Flat}    WeighImpRows;   /* Fo
 
 /* Structs that are output (modified) from the main function */
 typedef struct IsoTree {
-    ColType  col_type;
+    ColType  col_type = NotUsed; /* issues with uninitialized values passed to Cereal */
     size_t   col_num;
     double   num_split;
     std::vector<char> cat_split;
@@ -650,6 +650,8 @@ void traverse_hplane(std::vector<IsoHPlane>   &hplane,
                      size_t                   row);
 double extract_spC(PredictionData &prediction_data, size_t row, size_t col_num);
 double extract_spR(PredictionData &prediction_data, sparse_ix *row_st, sparse_ix *row_end, size_t col_num);
+void get_num_nodes(IsoForest &model_outputs, sparse_ix *restrict n_nodes, sparse_ix *restrict n_terminal, int nthreads);
+void get_num_nodes(ExtIsoForest &model_outputs, sparse_ix *restrict n_nodes, sparse_ix *restrict n_terminal, int nthreads);
 
 /* dist.cpp */
 void calc_similarity(double numeric_data[], int categ_data[],
