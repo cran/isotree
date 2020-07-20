@@ -1,5 +1,3 @@
-#include "isotree.h"
-
 /*    Isolation forests and variations thereof, with adjustments for incorporation
 *     of categorical variables and missing values.
 *     Writen for C++11 standard and aimed at being used in R and Python.
@@ -44,6 +42,7 @@
 *     OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 *     OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
+#include "isotree.h"
 
 void split_hplane_recursive(std::vector<IsoHPlane>   &hplanes,
                             WorkerMemory             &workspace,
@@ -312,8 +311,11 @@ void split_hplane_recursive(std::vector<IsoHPlane>   &hplanes,
             }
             hplanes.back().col_num.assign(workspace.col_take.begin(), workspace.col_take.begin() + workspace.ntaken);
             hplanes.back().col_type.assign(workspace.col_take_type.begin(), workspace.col_take_type.begin() + workspace.ntaken);
-            hplanes.back().coef.assign(workspace.ext_coef.begin(), workspace.ext_coef.begin() + workspace.ntaken);
-            hplanes.back().mean.assign(workspace.ext_mean.begin(), workspace.ext_mean.begin() + workspace.ntaken);
+            if (input_data.ncols_numeric)
+            {
+                hplanes.back().coef.assign(workspace.ext_coef.begin(), workspace.ext_coef.begin() + workspace.ntaken);
+                hplanes.back().mean.assign(workspace.ext_mean.begin(), workspace.ext_mean.begin() + workspace.ntaken);
+            }
 
             if (model_params.missing_action != Fail)
                 hplanes.back().fill_val.assign(workspace.ext_fill_val.begin(), workspace.ext_fill_val.begin() + workspace.ntaken);
@@ -332,7 +334,7 @@ void split_hplane_recursive(std::vector<IsoHPlane>   &hplanes,
 
                     case SubSet:
                     {
-                        if (!hplanes.back().cat_coef.size())
+                        if (hplanes.back().cat_coef.size() < workspace.ntaken)
                              hplanes.back().cat_coef.assign(workspace.ext_cat_coef.begin(),
                                                             workspace.ext_cat_coef.begin() + workspace.ntaken);
                         else
@@ -600,6 +602,29 @@ void add_chosen_column(WorkerMemory &workspace, InputData &input_data, ModelPara
                     for (int cat = 0; cat < input_data.ncat[workspace.col_chosen]; cat++)
                         workspace.ext_cat_coef[workspace.ntaken][cat] = workspace.coef_norm(workspace.rnd_generator);
 
+                    if (model_params.coef_by_prop)
+                    {
+                        int ncat = input_data.ncat[workspace.col_chosen];
+                        size_t *restrict counts = workspace.buffer_szt.data();
+                        size_t *restrict sorted_ix = workspace.buffer_szt.data() + ncat;
+                        /* calculate counts and sort by them */
+                        std::fill(counts, counts + ncat, (size_t)0);
+                        for (size_t ix = workspace.st; ix <= workspace.end; ix++)
+                            if (input_data.categ_data[workspace.col_chosen * input_data.nrows + ix] >= 0)
+                                counts[input_data.categ_data[workspace.col_chosen * input_data.nrows + ix]]++;
+                        std::iota(sorted_ix, sorted_ix + ncat, (size_t)0);
+                        std::sort(sorted_ix, sorted_ix + ncat,
+                                  [&counts](const size_t a, const size_t b){return counts[a] < counts[b];});
+                        /* now re-order the coefficients accordingly */
+                        std::sort(workspace.ext_cat_coef[workspace.ntaken].begin(),
+                                  workspace.ext_cat_coef[workspace.ntaken].begin() + ncat);
+                        std::copy(workspace.ext_cat_coef[workspace.ntaken].begin(),
+                                  workspace.ext_cat_coef[workspace.ntaken].begin() + ncat,
+                                  workspace.buffer_dbl.begin());
+                        for (size_t ix = 0; ix < ncat; ix++)
+                            workspace.ext_cat_coef[workspace.ntaken][ix] = workspace.buffer_dbl[sorted_ix[ix]];
+                    }
+
                     add_linear_comb(workspace.ix_arr.data(), workspace.st, workspace.end, workspace.comb_val.data(),
                                     input_data.categ_data + workspace.col_chosen * input_data.nrows,
                                     input_data.ncat[workspace.col_chosen],
@@ -707,8 +732,11 @@ void simplify_hplane(IsoHPlane &hplane, WorkerMemory &workspace, InputData &inpu
 
     hplane.coef.resize(ncols_numeric);
     hplane.mean.resize(ncols_numeric);
-    std::copy(workspace.ext_coef.begin(), workspace.ext_coef.begin() + ncols_numeric, hplane.coef.begin());
-    std::copy(workspace.ext_mean.begin(), workspace.ext_mean.begin() + ncols_numeric, hplane.mean.begin());
+    if (input_data.ncols_numeric)
+    {
+        std::copy(workspace.ext_coef.begin(), workspace.ext_coef.begin() + ncols_numeric, hplane.coef.begin());
+        std::copy(workspace.ext_mean.begin(), workspace.ext_mean.begin() + ncols_numeric, hplane.mean.begin());
+    }
 
     /* If there are no categorical columns, all of them will be numerical and there is no need to reorder */
     if (ncols_categ)

@@ -1,5 +1,3 @@
-#include "isotree.h"
-
 /*    Isolation forests and variations thereof, with adjustments for incorporation
 *     of categorical variables and missing values.
 *     Writen for C++11 standard and aimed at being used in R and Python.
@@ -44,6 +42,7 @@
 *     OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 *     OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
+#include "isotree.h"
 
 /* ceil(log2(x)) done with bit-wise operations ensures perfect precision (and it's faster too)
    https://stackoverflow.com/questions/2589096/find-most-significant-bit-left-most-that-is-set-in-a-bit-array
@@ -124,8 +123,8 @@ double expected_avg_depth(size_t sample_size)
 {
     switch(sample_size)
     {
-        case 1: return 0;
-        case 2: return 1;
+        case 1: return 0.;
+        case 2: return 1.;
         case 3: return 5.0/3.0;
         case 4: return 13.0/6.0;
         case 5: return 77.0/30.0;
@@ -158,11 +157,11 @@ double expected_separation_depth(size_t n)
 {
     switch(n)
     {
-        case 0: return 0;
-        case 1: return 0;
-        case 2: return 1;
-        case 3: return 1 + (1/3);
-        case 4: return 1 + (1/3) + (2/9);
+        case 0: return 0.;
+        case 1: return 0.;
+        case 2: return 1.;
+        case 3: return 1. + (1./3.);
+        case 4: return 1. + (1./3.) + (2./9.);
         case 5: return 1.71666666667;
         case 6: return 1.84;
         case 7: return 1.93809524;
@@ -213,7 +212,7 @@ double expected_separation_depth_hotstart(double curr, size_t n_curr, size_t n_f
     }
 
     for (size_t i = n_curr + 1; i <= n_final; i++)
-        curr += (-curr * (double)i + 3 * (double)i - 4) / ((double)i * ((double)(i-1)));
+        curr += (-curr * (double)i + 3. * (double)i - 4.) / ((double)i * ((double)(i-1)));
     return curr;
 }
 
@@ -224,7 +223,7 @@ double expected_separation_depth(long double n)
         return 3;
     double s_l = expected_separation_depth((size_t) floorl(n));
     long double u = ceill(n);
-    double s_u = s_l + (-s_l * u + 3 * u - 4) / (u * (u - 1));
+    double s_u = s_l + (-s_l * u + 3. * u - 4.) / (u * (u - 1.));
     double diff = n - floorl(n);
     return s_l + diff * s_u;
 }
@@ -285,6 +284,7 @@ void increase_comb_counter(size_t ix_arr[], size_t st, size_t end, size_t n,
         }
 }
 
+/* Note to self: don't try merge this into a template with the one above, as the other one has 'restrict' qualifier */
 void increase_comb_counter(size_t ix_arr[], size_t st, size_t end, size_t n,
                            double counter[], std::unordered_map<size_t, double> &weights, double exp_remainder)
 {
@@ -311,6 +311,54 @@ void increase_comb_counter(size_t ix_arr[], size_t st, size_t end, size_t n,
                 counter[ix_comb(i, j, n, ncomb)] += weights[i] * weights[j] * exp_remainder;
             }
         }
+}
+
+void increase_comb_counter_in_groups(size_t ix_arr[], size_t st, size_t end, size_t split_ix, size_t n,
+                                     double counter[], double exp_remainder)
+{
+    size_t n_group = 0;
+    for (size_t ix = st; ix <= end; ix++)
+        if (ix_arr[ix] < split_ix)
+            n_group++;
+        else
+            break;
+
+    n = n - split_ix;
+
+    if (exp_remainder <= 1)
+        for (size_t ix1 = st; ix1 < st + n_group; ix1++)
+            for (size_t ix2 = st + n_group; ix2 <= end; ix2++)
+                counter[ix_arr[ix1] * n + ix_arr[ix2] - split_ix]++;
+    else
+        for (size_t ix1 = st; ix1 < st + n_group; ix1++)
+            for (size_t ix2 = st + n_group; ix2 <= end; ix2++)
+                counter[ix_arr[ix1] * n + ix_arr[ix2] - split_ix] += exp_remainder;
+}
+
+void increase_comb_counter_in_groups(size_t ix_arr[], size_t st, size_t end, size_t split_ix, size_t n,
+                                     double *restrict counter, double *restrict weights, double exp_remainder)
+{
+    size_t n_group = 0;
+    for (size_t ix = st; ix <= end; ix++)
+        if (ix_arr[ix] < split_ix)
+            n_group++;
+        else
+            break;
+
+    n = n - split_ix;
+
+    if (exp_remainder <= 1)
+        for (size_t ix1 = st; ix1 < st + n_group; ix1++)
+            for (size_t ix2 = st + n_group; ix2 <= end; ix2++)
+                counter[ix_arr[ix1] * n + ix_arr[ix2] - split_ix]
+                    +=
+                weights[ix_arr[ix1]] * weights[ix_arr[ix2]];
+    else
+        for (size_t ix1 = st; ix1 < st + n_group; ix1++)
+            for (size_t ix2 = st + n_group; ix2 <= end; ix2++)
+                counter[ix_arr[ix1] * n + ix_arr[ix2] - split_ix]
+                    +=
+                weights[ix_arr[ix1]] * weights[ix_arr[ix2]] * exp_remainder;
 }
 
 void tmat_to_dense(double *restrict tmat, double *restrict dmat, size_t n, bool diag_to_one)
@@ -340,7 +388,7 @@ void tmat_to_dense(double *restrict tmat, double *restrict dmat, size_t n, bool 
 double calc_sd_raw(size_t cnt, long double sum, long double sum_sq)
 {
     if (cnt <= 1)
-        return 0;
+        return 0.;
     else
         return sqrtl(fmax(SD_MIN, (sum_sq - (square(sum) / (long double)cnt)) / (long double)cnt ));
 }
@@ -348,7 +396,7 @@ double calc_sd_raw(size_t cnt, long double sum, long double sum_sq)
 long double calc_sd_raw_l(size_t cnt, long double sum, long double sum_sq)
 {
     if (cnt <= 1)
-        return 0;
+        return 0.;
     else
         return sqrtl(fmaxl(SD_MIN, (sum_sq - (square(sum) / (long double)cnt)) / (long double)cnt ));
 }
@@ -439,7 +487,8 @@ void sample_random_rows(std::vector<size_t> &ix_arr, size_t nrows, bool with_rep
             for (size_t lev = 0; lev < log2_n; lev++)
             {
                 curr_ix = ix_parent(curr_ix);
-                btree_weights[curr_ix] -= sample_weights[ix];
+                btree_weights[curr_ix] =   btree_weights[ix_child(curr_ix)]
+                                         + btree_weights[ix_child(curr_ix) + 1];
             }
         }
     }
@@ -460,7 +509,7 @@ void sample_random_rows(std::vector<size_t> &ix_arr, size_t nrows, bool with_rep
             std::iota(ix_all.begin(), ix_all.end(), (size_t)0);
 
             /* If the number of sampled elements is large, do a full shuffle, enjoy simd-instructs when copying over */
-            if (ntake >= (nrows * 3/4))
+            if (ntake >= ((nrows * 3)/4))
             {
                 std::shuffle(ix_all.begin(), ix_all.end(), rnd_generator);
                 ix_arr.assign(ix_all.begin(), ix_all.begin() + ntake);
@@ -488,7 +537,7 @@ void sample_random_rows(std::vector<size_t> &ix_arr, size_t nrows, bool with_rep
             size_t candidate;
 
             /* if the sample size is relatively large, use a temporary boolean vector */
-            if ((ntake / nrows) > (1 / 20))
+            if (((long double)ntake / (long double)nrows) > (1. / 20.))
             {
 
                 if (!is_repeated.size())
@@ -573,7 +622,7 @@ void weighted_shuffle(size_t *restrict outp, size_t n, double *restrict weights,
         curr_subrange = buffer_arr[0];
         for (size_t lev = 0; lev < tree_levels; lev++)
         {
-            rnd_subrange = std::uniform_real_distribution<double>(0, curr_subrange)(rnd_generator);
+            rnd_subrange = std::uniform_real_distribution<double>(0., curr_subrange)(rnd_generator);
             w_left = buffer_arr[ix_child(curr_ix)];
             curr_ix = ix_child(curr_ix) + (rnd_subrange >= w_left);
             curr_subrange = buffer_arr[curr_ix];
@@ -587,7 +636,8 @@ void weighted_shuffle(size_t *restrict outp, size_t n, double *restrict weights,
         for (size_t lev = 0; lev < tree_levels; lev++)
         {
             curr_ix = ix_parent(curr_ix);
-            buffer_arr[curr_ix] -= weights[outp[el]];
+            buffer_arr[curr_ix] =   buffer_arr[ix_child(curr_ix)]
+                                  + buffer_arr[ix_child(curr_ix) + 1];
         }
     }
 
@@ -1499,4 +1549,26 @@ void todense(size_t ix_arr[], size_t st, size_t end,
                 curr_pos = std::lower_bound(Xc_ind + curr_pos + 1, Xc_ind + end_col + 1, *row) - Xc_ind;
         }
     }
+}
+
+/* Function to handle interrupt signals */
+void set_interrup_global_variable(int s)
+{
+    fprintf(stderr, "Error: procedure was interrupted\n");
+    #pragma omp critical
+    {
+        interrupt_switch = true;
+    }
+}
+
+/* Return the #def'd constants from standard header. This is in order to determine if the return
+   value from the 'fit_model' function is a success or failure within Cython, which does not
+   allow importing #def'd macro values. */
+int return_EXIT_SUCCESS()
+{
+    return EXIT_SUCCESS;
+}
+int return_EXIT_FAILURE()
+{
+    return EXIT_FAILURE;
 }

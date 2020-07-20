@@ -1,5 +1,3 @@
-#include "isotree.h"
-
 /*    Isolation forests and variations thereof, with adjustments for incorporation
 *     of categorical variables and missing values.
 *     Writen for C++11 standard and aimed at being used in R and Python.
@@ -44,6 +42,7 @@
 *     OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 *     OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
+#include "isotree.h"
 
 #define pw1(x) ((x))
 #define pw2(x) ((x) * (x))
@@ -695,7 +694,7 @@ double eval_guided_crit(size_t *restrict ix_arr, size_t st, size_t end, int *res
                     {
                         this_gain = sd_gain(sd_full,
                                             0.0,
-                                            expected_sd_cat_single(buffer_cnt, buffer_prob, ncat_present, buffer_pos + st_pos, pos, cnt)
+                                            expected_sd_cat_single(buffer_cnt, buffer_prob, ncat_present, buffer_pos + st_pos, pos - st_pos, cnt)
                                             );
                         if (this_gain > min_gain && this_gain > best_gain)
                         {
@@ -711,14 +710,11 @@ double eval_guided_crit(size_t *restrict ix_arr, size_t st, size_t end, int *res
                     /* here it will always pick the largest one */
                     size_t ncat_present = 0;
                     size_t cnt_max = 0;
-                    long double s = 0;
                     for (int cat = 0; cat < ncat; cat++)
                     {
                         if (buffer_cnt[cat])
                         {
                             ncat_present++;
-                            s += (buffer_cnt[cat] <= 1)?
-                                  0 : ((long double)buffer_cnt[cat] * logl((long double)buffer_cnt[cat]));
                             if (cnt_max < buffer_cnt[cat])
                             {
                                 cnt_max = buffer_cnt[cat];
@@ -730,12 +726,10 @@ double eval_guided_crit(size_t *restrict ix_arr, size_t st, size_t end, int *res
                     if (ncat_present <= 1) return -HUGE_VAL;
 
                     long double cnt_left = (long double)((end - st + 1) - cnt_max);
-                    long double base_info = cnt * logl(cnt) - s;
                     this_gain = (
-                                    base_info - 
-                                    (
-                                        (cnt_left <= 1)? 0 : (cnt_left * logl(cnt_left))
-                                    )
+                                    (long double)cnt * logl((long double)cnt)
+                                        - cnt_left * logl(cnt_left)
+                                        - (long double)cnt_max * logl((long double)cnt_max)
                                 ) / cnt;
                     best_gain = (this_gain > min_gain)? this_gain : best_gain;
                     break;

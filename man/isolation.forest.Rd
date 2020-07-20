@@ -22,6 +22,8 @@ isolation.forest(
   new_categ_action = ifelse(ndim > 1, "impute", "weighted"),
   categ_split_type = "subset",
   all_perm = FALSE,
+  coef_by_prop = FALSE,
+  recode_categ = TRUE,
   weights_as_sample_prob = TRUE,
   sample_with_replacement = FALSE,
   penalize_range = TRUE,
@@ -67,7 +69,9 @@ Recommended value in references [1], [2], [3], [4] is 256, while the default val
 `NROW(df)` (same as in here).}
 
 \item{ntrees}{Number of binary trees to build for the model. Recommended value in reference [1] is 100, while the
-default value in the author's code in reference [5] is 10.}
+default value in the author's code in reference [5] is 10. In general, the number of trees required for good results
+is higher when (a) there are many columns, (b) there are categorical variables, (c) categorical variables have many
+categories, (d) you are using large `ndim`.}
 
 \item{ndim}{Number of columns to combine to produce a split. If passing 1, will produce the single-variable model described
 in references [1] and [2], while if passing values greater than 1, will produce the extended model described in
@@ -98,6 +102,7 @@ and calculate gain with those assumed standard deviations. For the extended mode
 probability that the split point in the chosen linear combination of variables will be decided by this averaged gain
 criterion. Compared to a pooled average, this tends to result in more cases in which a single observation or very few
 of them are put into one branch. Recommended to use sub-samples (parameter `sample_size`) when passing this parameter.
+Note that, since this will created isolated nodes faster, the resulting object will be lighter (use less memory).
 When splits are not made according to any of `prob_pick_avg_gain`, `prob_pick_pooled_gain`, `prob_split_avg_gain`,
 `prob_split_pooled_gain`, both the column and the split point are decided at random. Default setting for 
 references [1], [2], [3] is zero, and default for reference [4] is 1. This is the randomization parameter
@@ -116,7 +121,9 @@ groups when they are smaller. Recommended to pass higher values when used for im
 When used for outlier detection, higher values of this parameter result in models that are able to better flag
 outliers in the training data, but generalize poorly to outliers in new data and to values of variables
 outside of the ranges from the training data. Passing small `sample_size` and high values of this parameter will
-tend to flag too many outliers. When splits are not made according to any of `prob_pick_avg_gain`,
+tend to flag too many outliers.
+Note that, since this makes the trees more even and thus it takes more steps to produce isolated nodes,
+the resulting object will be heavier (use more memory). When splits are not made according to any of `prob_pick_avg_gain`,
 `prob_pick_pooled_gain`, `prob_split_avg_gain`, `prob_split_pooled_gain`, both the column and the split point
 are decided at random. Note that, if passing value = 1 with no sub-sampling and using the single-variable model,
 every single tree will have the exact same splits.}
@@ -165,13 +172,26 @@ Ignored when passing `categ_split_type` = `"single_categ"`.}
 or by assigning a single category to a branch and the rest to the other branch (by passing `"single_categ"` here). For the extended model,
 whether to give each category a coefficient (`"subset"`), or only one while the rest get zero (`"single_categ"`).}
 
-\item{all_perm}{When doing categorical variable splits by pooled gain, whether to consider all possible permutations
-of variables to assign to each branch or not. If `FALSE`, will sort the categories by their frequency
-and make a grouping in this sorted order. Note that the number of combinations evaluated (if `TRUE`)
-is the factorial of the number of present categories in a given column (minus 2). For averaged gain, the
-best split is always to put the second most-frequent category in a separate branch, so not evaluating all
-permutations (passing `FALSE`) will make it possible to select other splits that respect the sorted frequency order.
-Ignored when not using categorical variables or not doing splits by pooled gain.}
+\item{all_perm}{When doing categorical variable splits by pooled gain with `ndim=1` (regular model),
+whether to consider all possible permutations of variables to assign to each branch or not. If `FALSE`,
+will sort the categories by their frequency and make a grouping in this sorted order. Note that the
+number of combinations evaluated (if `TRUE`) is the factorial of the number of present categories in
+a given column (minus 2). For averaged gain, the best split is always to put the second most-frequent
+category in a separate branch, so not evaluating all  permutations (passing `FALSE`) will make it
+possible to select other splits that respect the sorted frequency order.
+Ignored when not using categorical variables or not doing splits by pooled gain or using `ndim>1`.}
+
+\item{coef_by_prop}{In the extended model, whether to sort the randomly-generated coefficients for categories
+according to their relative frequency in the tree node. This might provide better results when using
+categorical variables with too many categories, but is not recommended, and not reflective of
+real "categorical-ness". Ignored for the regular model (`ndim=1`) and/or when not using categorical
+variables.}
+
+\item{recode_categ}{Whether to re-encode categorical variables even in case they are already passed
+as factors. This is recommended as it will eliminate potentially redundant categorical levels if
+they have no observations, but if the categorical variables are already of type `factor` with only
+the levels that are present, it can be skipped for slightly faster fitting times. You'll likely
+want to pass `FALSE` here if merging several models into one through \link{append.trees}.}
 
 \item{weights_as_sample_prob}{If passing `sample_weights` argument, whether to consider those weights as row
 sampling weights (i.e. the higher the weights, the more likely the observation will end up included
@@ -196,7 +216,9 @@ assigning to each category a random number `~ Unif(0, 1)`.}
 
 \item{coefs}{For the extended model, whether to sample random coefficients according to a normal distribution `~ N(0, 1)`
 (as proposed in reference [3]) or according to a uniform distribution `~ Unif(-1, +1)` as proposed in reference [4].
-Ignored for the single-variable model.}
+Ignored for the single-variable model. Note that, for categorical variables, the coefficients will be sampled ~ N (0,1)
+regardless - in order for both types of variables to have transformations in similar ranges (which will tend
+to boost the importance of categorical variables), pass ``"uniform"`` here.}
 
 \item{assume_full_distr}{When calculating pairwise distances (see reference [8]), whether to assume that the fitted model represents
 a full population distribution (will use a standardizing criterion assuming infinite sample as in reference [6],
@@ -240,10 +262,10 @@ results from this might differet a bit from those of `predict` called after.}
 \item{output_dist}{Whether to output pairwise distances for the input data, which will be calculated as
 the model is being fit and it's thus faster. Cannot be done when using sub-samples of the data for each tree
 (in such case will later need to call the `predict` function on the same data). If using `penalize_range`, the
-results from this might differet a bit from those of `predict` called after.}
+results from this might differ a bit from those of `predict` called after.}
 
 \item{square_dist}{If passing `output_dist` = `TRUE`, whether to return a full square matrix or
-just the upper-triangular part, in which the entry for pair 1 <= i < j <= n is located at position
+just the upper-triangular part, in which the entry for pair (i,j) with 1 <= i < j <= n is located at position
 p(i, j) = ((i - 1) * (n - i/2) + j - i).}
 
 \item{random_seed}{Seed that will be used to generate random numbers used by the model.}
@@ -403,7 +425,7 @@ plot.space(Z4, "Fair-Cut Forest")
 par(oldpar)
 
 
-### Example3:  calculating pairwise distances,
+### Example 3: calculating pairwise distances,
 ### with a short validation against euclidean dist.
 library(isotree)
 

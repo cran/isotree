@@ -49,7 +49,9 @@
 #' Recommended value in references [1], [2], [3], [4] is 256, while the default value in the author's code in reference [5] is
 #' `NROW(df)` (same as in here).
 #' @param ntrees Number of binary trees to build for the model. Recommended value in reference [1] is 100, while the
-#' default value in the author's code in reference [5] is 10.
+#' default value in the author's code in reference [5] is 10. In general, the number of trees required for good results
+#' is higher when (a) there are many columns, (b) there are categorical variables, (c) categorical variables have many
+#' categories, (d) you are using large `ndim`.
 #' @param ndim Number of columns to combine to produce a split. If passing 1, will produce the single-variable model described
 #' in references [1] and [2], while if passing values greater than 1, will produce the extended model described in
 #' references [3] and [4].
@@ -76,6 +78,7 @@
 #' probability that the split point in the chosen linear combination of variables will be decided by this averaged gain
 #' criterion. Compared to a pooled average, this tends to result in more cases in which a single observation or very few
 #' of them are put into one branch. Recommended to use sub-samples (parameter `sample_size`) when passing this parameter.
+#' Note that, since this will created isolated nodes faster, the resulting object will be lighter (use less memory).
 #' When splits are not made according to any of `prob_pick_avg_gain`, `prob_pick_pooled_gain`, `prob_split_avg_gain`,
 #' `prob_split_pooled_gain`, both the column and the split point are decided at random. Default setting for 
 #' references [1], [2], [3] is zero, and default for reference [4] is 1. This is the randomization parameter
@@ -93,7 +96,9 @@
 #' When used for outlier detection, higher values of this parameter result in models that are able to better flag
 #' outliers in the training data, but generalize poorly to outliers in new data and to values of variables
 #' outside of the ranges from the training data. Passing small `sample_size` and high values of this parameter will
-#' tend to flag too many outliers. When splits are not made according to any of `prob_pick_avg_gain`,
+#' tend to flag too many outliers.
+#' Note that, since this makes the trees more even and thus it takes more steps to produce isolated nodes,
+#' the resulting object will be heavier (use more memory). When splits are not made according to any of `prob_pick_avg_gain`,
 #' `prob_pick_pooled_gain`, `prob_split_avg_gain`, `prob_split_pooled_gain`, both the column and the split point
 #' are decided at random. Note that, if passing value = 1 with no sub-sampling and using the single-variable model,
 #' every single tree will have the exact same splits.
@@ -135,13 +140,24 @@
 #' @param categ_split_type Whether to split categorical features by assigning sub-sets of them to each branch (by passing `"subset"` there),
 #' or by assigning a single category to a branch and the rest to the other branch (by passing `"single_categ"` here). For the extended model,
 #' whether to give each category a coefficient (`"subset"`), or only one while the rest get zero (`"single_categ"`).
-#' @param all_perm When doing categorical variable splits by pooled gain, whether to consider all possible permutations
-#' of variables to assign to each branch or not. If `FALSE`, will sort the categories by their frequency
-#' and make a grouping in this sorted order. Note that the number of combinations evaluated (if `TRUE`)
-#' is the factorial of the number of present categories in a given column (minus 2). For averaged gain, the
-#' best split is always to put the second most-frequent category in a separate branch, so not evaluating all
-#' permutations (passing `FALSE`) will make it possible to select other splits that respect the sorted frequency order.
-#' Ignored when not using categorical variables or not doing splits by pooled gain.
+#' @param all_perm When doing categorical variable splits by pooled gain with `ndim=1` (regular model),
+#' whether to consider all possible permutations of variables to assign to each branch or not. If `FALSE`,
+#' will sort the categories by their frequency and make a grouping in this sorted order. Note that the
+#' number of combinations evaluated (if `TRUE`) is the factorial of the number of present categories in
+#' a given column (minus 2). For averaged gain, the best split is always to put the second most-frequent
+#' category in a separate branch, so not evaluating all  permutations (passing `FALSE`) will make it
+#' possible to select other splits that respect the sorted frequency order.
+#' Ignored when not using categorical variables or not doing splits by pooled gain or using `ndim>1`.
+#' @param coef_by_prop In the extended model, whether to sort the randomly-generated coefficients for categories
+#' according to their relative frequency in the tree node. This might provide better results when using
+#' categorical variables with too many categories, but is not recommended, and not reflective of
+#' real "categorical-ness". Ignored for the regular model (`ndim=1`) and/or when not using categorical
+#' variables.
+#' @param recode_categ Whether to re-encode categorical variables even in case they are already passed
+#' as factors. This is recommended as it will eliminate potentially redundant categorical levels if
+#' they have no observations, but if the categorical variables are already of type `factor` with only
+#' the levels that are present, it can be skipped for slightly faster fitting times. You'll likely
+#' want to pass `FALSE` here if merging several models into one through \link{append.trees}.
 #' @param weights_as_sample_prob If passing `sample_weights` argument, whether to consider those weights as row
 #' sampling weights (i.e. the higher the weights, the more likely the observation will end up included
 #' in each tree sub-sample), or as distribution density weights (i.e. putting a weight of two is the same
@@ -161,7 +177,9 @@
 #' assigning to each category a random number `~ Unif(0, 1)`.
 #' @param coefs For the extended model, whether to sample random coefficients according to a normal distribution `~ N(0, 1)`
 #' (as proposed in reference [3]) or according to a uniform distribution `~ Unif(-1, +1)` as proposed in reference [4].
-#' Ignored for the single-variable model.
+#' Ignored for the single-variable model. Note that, for categorical variables, the coefficients will be sampled ~ N (0,1)
+#' regardless - in order for both types of variables to have transformations in similar ranges (which will tend
+#' to boost the importance of categorical variables), pass ``"uniform"`` here.
 #' @param assume_full_distr When calculating pairwise distances (see reference [8]), whether to assume that the fitted model represents
 #' a full population distribution (will use a standardizing criterion assuming infinite sample as in reference [6],
 #' and the results of the similarity between two points at prediction time will not depend on the
@@ -197,9 +215,9 @@
 #' @param output_dist Whether to output pairwise distances for the input data, which will be calculated as
 #' the model is being fit and it's thus faster. Cannot be done when using sub-samples of the data for each tree
 #' (in such case will later need to call the `predict` function on the same data). If using `penalize_range`, the
-#' results from this might differet a bit from those of `predict` called after.
+#' results from this might differ a bit from those of `predict` called after.
 #' @param square_dist If passing `output_dist` = `TRUE`, whether to return a full square matrix or
-#' just the upper-triangular part, in which the entry for pair 1 <= i < j <= n is located at position
+#' just the upper-triangular part, in which the entry for pair (i,j) with 1 <= i < j <= n is located at position
 #' p(i, j) = ((i - 1) * (n - i/2) + j - i).
 #' @param random_seed Seed that will be used to generate random numbers used by the model.
 #' @param nthreads Number of parallel threads to use. If passing a negative number, will use
@@ -329,7 +347,7 @@
 #' par(oldpar)
 #' 
 #' 
-#' ### Example3:  calculating pairwise distances,
+#' ### Example 3: calculating pairwise distances,
 #' ### with a short validation against euclidean dist.
 #' library(isotree)
 #' 
@@ -432,6 +450,7 @@ isolation.forest <- function(df, sample_weights = NULL, column_weights = NULL,
                              min_gain = 0, missing_action = ifelse(ndim > 1, "impute", "divide"),
                              new_categ_action = ifelse(ndim > 1, "impute", "weighted"),
                              categ_split_type = "subset", all_perm = FALSE,
+                             coef_by_prop = FALSE, recode_categ = TRUE,
                              weights_as_sample_prob = TRUE, sample_with_replacement = FALSE,
                              penalize_range = TRUE, weigh_by_kurtosis = FALSE,
                              coefs = "normal", assume_full_distr = TRUE,
@@ -468,6 +487,8 @@ isolation.forest <- function(df, sample_weights = NULL, column_weights = NULL,
     check.is.prob(prob_split_pooled_gain,  "prob_split_pooled_gain")
     
     check.is.bool(all_perm,                 "all_perm")
+    check.is.bool(recode_categ,             "recode_categ")
+    check.is.bool(coef_by_prop,             "coef_by_prop")
     check.is.bool(weights_as_sample_prob,   "weights_as_sample_prob")
     check.is.bool(sample_with_replacement,  "sample_with_replacement")
     check.is.bool(penalize_range,           "penalize_range")
@@ -513,6 +534,9 @@ isolation.forest <- function(df, sample_weights = NULL, column_weights = NULL,
         if (new_categ_action == "weighted")
             stop("'new_categ_action' = 'weighted' not supported in extended model.")
     }
+    
+    if (ndim > NCOL(df))
+        stop("'ndim' must be less or equal than the number of columns in 'df'.")
     
     nthreads <- check.nthreads(nthreads)
     if (sample_size > NROW(df)) stop("'sample_size' cannot be greater then the number of rows in 'df'.")
@@ -577,6 +601,7 @@ isolation.forest <- function(df, sample_weights = NULL, column_weights = NULL,
     min_gain                 <-  as.numeric(min_gain)
     
     all_perm                 <-  as.logical(all_perm)
+    coef_by_prop             <-  as.logical(coef_by_prop)
     weights_as_sample_prob   <-  as.logical(weights_as_sample_prob)
     sample_with_replacement  <-  as.logical(sample_with_replacement)
     penalize_range           <-  as.logical(penalize_range)
@@ -584,14 +609,25 @@ isolation.forest <- function(df, sample_weights = NULL, column_weights = NULL,
     assume_full_distr        <-  as.logical(assume_full_distr)
     
     ### split column types
-    pdata <- process.data(df, sample_weights, column_weights)
+    pdata <- process.data(df, sample_weights, column_weights, recode_categ)
+    
+    ### extra check for potential integer overflow
+    if (all_perm && (ndim == 1) &&
+        (prob_pick_pooled_gain || prob_split_pooled_gain) &&
+        NROW(pdata$cat_levs)
+        ) {
+        max_categ <- max(sapply(pdata$cat_levs, NROW))
+        if (factorial(max_categ) > 2 * .Machine$integer.max)
+            stop(paste0("Number of permutations for categorical variables is larger than ",
+                        "maximum representable integer. Try using 'all_perm=FALSE'."))
+    }
     
     ### fit the model
     cpp_outputs <- fit_model(pdata$X_num, pdata$X_cat, unname(pdata$ncat),
                              pdata$Xc, pdata$Xc_ind, pdata$Xc_indptr,
                              pdata$sample_weights, pdata$column_weights,
                              pdata$nrows, pdata$ncols_num, pdata$ncols_cat, ndim, ntry,
-                             coefs, sample_with_replacement, weights_as_sample_prob,
+                             coefs, coef_by_prop, sample_with_replacement, weights_as_sample_prob,
                              sample_size, ntrees,  max_depth, FALSE,
                              penalize_range, output_dist, TRUE, square_dist,
                              output_score, TRUE, weigh_by_kurtosis,
@@ -602,6 +638,9 @@ isolation.forest <- function(df, sample_weights = NULL, column_weights = NULL,
                              build_imputer, output_imputations, min_imp_obs,
                              depth_imp, weigh_imp_rows,
                              random_seed, nthreads)
+    
+    if (cpp_outputs$err)
+        stop("Procedure was interrupted.")
     
     ### pack the outputs
     this <- list(
@@ -614,7 +653,8 @@ isolation.forest <- function(df, sample_weights = NULL, column_weights = NULL,
             prob_split_pooled_gain = prob_split_pooled_gain,
             min_gain = min_gain, missing_action = missing_action,
             new_categ_action = new_categ_action,
-            categ_split_type = categ_split_type, all_perm = all_perm,
+            categ_split_type = categ_split_type,
+            all_perm = all_perm, coef_by_prop = coef_by_prop,
             weights_as_sample_prob = weights_as_sample_prob,
             sample_with_replacement = sample_with_replacement,
             penalize_range = penalize_range,
@@ -624,7 +664,6 @@ isolation.forest <- function(df, sample_weights = NULL, column_weights = NULL,
             depth_imp = depth_imp, weigh_imp_rows = weigh_imp_rows
         ),
         metadata  = list(
-            nrows      =  pdata$nrows,
             ncols_num  =  pdata$ncols_num,
             ncols_cat  =  pdata$ncols_cat,
             cols_num   =  pdata$cols_num,
@@ -660,7 +699,7 @@ isolation.forest <- function(df, sample_weights = NULL, column_weights = NULL,
         if (output_imputations) {
             outp$imputed   <-  reconstruct.from.imp(cpp_outputs$imputed_num,
                                                     cpp_outputs$imputed_cat,
-                                                    df, this)
+                                                    df, this, trans_CSC = FALSE)
         }
         return(outp)
     }
@@ -668,15 +707,15 @@ isolation.forest <- function(df, sample_weights = NULL, column_weights = NULL,
 
 #' @title Predict method for Isolation Forest
 #' @param object An Isolation Forest object as returned by `isolation.forest`.
-#' @param newdata A data.frame, matrix, or sparse matrix (from package `Matrix` or `SparseM`, CSC format for distance and outlierness,
+#' @param newdata A `data.frame`, `matrix`, or sparse matrix (from package `Matrix` or `SparseM`, CSC format for distance and outlierness,
 #' or CSR format for outlierness and imputations) for which to predict outlierness, distance, or imputations of missing values.
-#' Note that when passing `type` = `"impute"` and newdata is a sparse matrix, under some situations it might get modified in-place.
+#' Note that when passing `type` = `"impute"` and `newdata` is a sparse matrix, under some situations it might get modified in-place.
 #' @param type Type of prediction to output. Options are:
 #' \itemize{
 #'   \item `"score"` for the standardized outlier score, where values closer to 1 indicate more outlierness, while values
 #'   closer to 0.5 indicate average outlierness, and close to 0 more averageness (harder to isolate).
 #'   \item `"avg_depth"` for  the non-standardized average isolation depth.
-#'   \item `"dist"` for approximate pairwise distances (must pass more than 1 row) - these are
+#'   \item `"dist"` for approximate pairwise or between-points distances (must pass more than 1 row) - these are
 #'   standardized in the same way as outlierness, values closer to zero indicate nearer points,
 #'   closer to one further away points, and closer to 0.5 average distance.
 #'   \item `"avg_sep"` for the non-standardized average separation depth.
@@ -685,16 +724,23 @@ isolation.forest <- function(df, sample_weights = NULL, column_weights = NULL,
 #'   `score` and `tree_num`, respectively.
 #'   \item `"impute"` for imputation of missing values in `newdata`.
 #' }
-#' @param square_mat When passing `type` = `"dist` or `"avg_sep"`, whether to return a full square matrix or
-#' just the upper-triangular part, in which the entry for pair 1 <= i < j <= n is located at position
+#' @param square_mat When passing `type` = `"dist` or `"avg_sep"` with no `refdata`, whether to return a full square matrix or
+#' just the upper-triangular part, in which the entry for pair (i,j) with 1 <= i < j <= n is located at position
 #' p(i, j) = ((i - 1) * (n - i/2) + j - i).
+#' Ignored when not predicting distance/separation or when passing `refdata`.
+#' @param refdata If passing this and calculating distance or average separation depth, will calculate distances
+#' between each point in `newdata` and each point in `refdata`, outputing a matrix in which points in `newdata`
+#' correspond to rows and points in `refdata` correspond to columns. Must be of the same type as `newdata` (e.g.
+#' `data.frame`, `matrix`, `dgCMatrix`, etc.). If this is not passed, and type is `"dist"`
+#' or `"avg_sep"`, will calculate pairwise distances/separation between the points in `newdata`.
 #' @param ... Not used.
 #' @return The requested prediction type, which can be a vector with one entry per row in `newdata`
 #' (for output types `"score"`, `"avg_depth"`, `"tree_num"`), a square matrix or vector with the upper triangular
-#' part of a square matrix (for output types `"dist"`, `"avg_sep"`), or the same type as the input `newdata`
-#' (for output type `"impute"`).
+#' part of a square matrix (for output types `"dist"`, `"avg_sep"`, with no `refdata`), a matrix with points in
+#' `newdata` as rows and points in `refdata` as columns (for output types `"dist"`, `"avg_sep"`, with `refdata`),
+#' or the same type as the input `newdata` (for output type `"impute"`).
 #' @details The more threads that are set for the model, the higher the memory requirement will be as each
-#' thread will allocate an array with one entry per row (ourlierness) or combination (distance).
+#' thread will allocate an array with one entry per row (outlierness) or combination (distance).
 #' 
 #' Outlierness predictions for sparse data will be much slower than for dense data. Not recommended to pass
 #' sparse matrices unless they are too big to fit in memory.
@@ -703,12 +749,16 @@ isolation.forest <- function(df, sample_weights = NULL, column_weights = NULL,
 #' it will only de-serialize the underlying C++ object upon running `predict`, `print`, or `summary`, so the
 #' first run will  be slower, while subsequent runs will be faster as the C++ object will already be in-memory.
 #' 
-#' In order to save memory when fitting and serializing models, the functionality for outputing
+#' In order to save memory when fitting and serializing models, the functionality for outputting
 #' terminal node numbers will generate index mappings on the fly for all tree nodes, even if passing only
 #' 1 row, so it's only recommended for batch predictions.
+#' 
+#' The outlier scores/depth predict functionality is optimized for making predictions on one or a
+#' few rows at a time - for making large batches of predictions, it might be faster to use the
+#' `output_score=TRUE` in `isolation.forest`.
 #' @seealso \link{isolation.forest} \link{unpack.isolation.forest}
 #' @export
-predict.isolation_forest <- function(object, newdata, type = "score", square_mat = FALSE, ...) {
+predict.isolation_forest <- function(object, newdata, type="score", square_mat=FALSE, refdata=NULL, ...) {
     if (check_null_ptr_model(object$cpp_obj$ptr)) {
         obj_new <- object$cpp_obj
         if (object$params$ndim == 1)
@@ -726,7 +776,7 @@ predict.isolation_forest <- function(object, newdata, type = "score", square_mat
         object$cpp_obj <- obj_new
     }
     
-    allowed_type <- c("score", "avg_path", "dist", "avg_sep", "tree_num", "impute")
+    allowed_type <- c("score", "avg_depth", "dist", "avg_sep", "tree_num", "impute")
     check.str.option(type, "type", allowed_type)
     check.is.bool(square_mat)
     if (!NROW(newdata)) stop("'newdata' must be a data.frame, matrix, or sparse matrix.")
@@ -743,40 +793,55 @@ predict.isolation_forest <- function(object, newdata, type = "score", square_mat
     if (type %in% "impute" && (is.null(object$params$build_imputer) || !(object$params$build_imputer)))
         stop("Cannot impute missing values with model that was built with 'build_imputer' =  'FALSE'.")
     
-    pdata <- process.data.new(newdata, object$metadata, type %in% c("score", "avg_path"), type != "impute")
+    if (is.null(refdata) && (type %in% c("dist", "avg_sep"))) {
+        nobs_group1 <- 0L
+    } else {
+        nobs_group1 <- NROW(newdata)
+        newdata     <- rbind(newdata, refdata)
+    }
+    
+    pdata <- process.data.new(newdata, object$metadata, type %in% c("score", "avg_depth"), type != "impute")
     
     square_mat   <-  as.logical(square_mat)
     score_array  <-  get.empty.vector()
     dist_tmat    <-  get.empty.vector()
     dist_dmat    <-  get.empty.vector()
+    dist_rmat    <-  get.empty.vector()
     tree_num     <-  get.empty.int.vector()
     
     if (type %in% c("dist", "avg_sep")) {
         if (NROW(newdata) == 1) stop("Need more than 1 data point for distance predictions.")
-        dist_tmat <- vector("numeric", (pdata$nrows * (pdata$nrows - 1)) / 2)
-        if (square_mat) dist_dmat <- vector("numeric", pdata$nrows ^ 2)
+        if (is.null(refdata)) {
+            dist_tmat <- vector("numeric", (pdata$nrows * (pdata$nrows - 1L)) / 2L)
+            if (square_mat) dist_dmat <- vector("numeric", pdata$nrows ^ 2)
+        } else {
+            dist_rmat <- vector("numeric", nobs_group1 * (pdata$nrows - nobs_group1))
+        }
     } else {
         score_array <- vector("numeric", pdata$nrows)
         if (type == "tree_num") tree_num <- vector("integer", pdata$nrows * object$params$ntrees)
     }
     
-    if (type %in% c("score", "avg_path", "tree_num")) {
+    if (type %in% c("score", "avg_depth", "tree_num")) {
         predict_iso(object$cpp_obj$ptr, score_array, tree_num, object$params$ndim > 1,
                     pdata$X_num, pdata$X_cat,
                     pdata$Xc, pdata$Xc_ind, pdata$Xc_indptr,
                     pdata$Xr, pdata$Xr_ind, pdata$Xr_indptr,
                     pdata$nrows, object$nthreads, type == "score")
         if (type == "tree_num")
-            return(list(score = score_array, tree_num = matrix(tree_num + 1, nrow = pdata$nrows, ncol = object$params$ntrees)))
+            return(list(score = score_array, tree_num = matrix(tree_num + 1L, nrow = pdata$nrows, ncol = object$params$ntrees)))
         else
             return(score_array)
     } else if (type != "impute") {
-        dist_iso(object$cpp_obj$ptr, dist_tmat, dist_dmat, object$params$ndim > 1,
+        dist_iso(object$cpp_obj$ptr, dist_tmat, dist_dmat, dist_rmat,
+                 object$params$ndim > 1,
                  pdata$X_num, pdata$X_cat,
                  pdata$Xc, pdata$Xc_ind, pdata$Xc_indptr,
                  pdata$nrows, object$nthreads, object$params$assume_full_distr,
-                 type == "dist", square_mat)
-        if (square_mat)
+                 type == "dist", square_mat, nobs_group1)
+        if (!is.null(refdata))
+            return(t(matrix(dist_rmat, ncol = nobs_group1)))
+        else if (square_mat)
             return(matrix(dist_dmat, nrow = pdata$nrows, ncol = pdata$nrows))
         else
             return(dist_tmat)
@@ -787,7 +852,8 @@ predict.isolation_forest <- function(object, newdata, type = "score", square_mat
                           pdata$nrows, object$nthreads)
         return(reconstruct.from.imp(imp$X_num,
                                     imp$X_cat,
-                                    newdata, object))
+                                    newdata, object,
+                                    trans_CSC = TRUE))
     }
 }
 
@@ -924,7 +990,9 @@ add.isolation.tree <- function(model, df, sample_weights = NULL, column_weights 
                                              pdata$Xc, pdata$Xc_ind, pdata$Xc_indptr,
                                              sample_weights, column_weights,
                                              pdata$nrows, model$metadata$ncols_num, model$metadata$ncols_cat,
-                                             model$params$ndim, model$params$ntry, model$params$coefs, model$params$max_depth,
+                                             model$params$ndim, model$params$ntry,
+                                             model$params$coefs, model$params$coef_by_prop,
+                                             model$params$max_depth,
                                              FALSE, model$params$penalize_range,
                                              model$params$weigh_by_kurtosis,
                                              model$params$prob_pick_avg_gain, model$params$prob_split_avg_gain,
@@ -936,7 +1004,7 @@ add.isolation.tree <- function(model, df, sample_weights = NULL, column_weights 
                                              model$params$depth_imp, model$params$weigh_imp_rows,
                                              model$params$all_perm, model$random_seed)
     
-    model_new$params$ntrees <- model_new$params$ntrees + 1
+    model_new$params$ntrees <- model_new$params$ntrees + 1L
     eval.parent(substitute(model <- model_new))
     return(invisible(NULL))
 }
@@ -968,7 +1036,7 @@ add.isolation.tree <- function(model, df, sample_weights = NULL, column_weights 
 #' library(isotree)
 #' set.seed(1)
 #' X <- matrix(rnorm(100), nrow = 20)
-#' iso <- isolation.forest(X, nthreads = 1)
+#' iso <- isolation.forest(X, ntrees=10, nthreads=1)
 #' temp_file <- file.path(tempdir(), "iso.Rds")
 #' saveRDS(iso, temp_file)
 #' iso2 <- readRDS(temp_file)
@@ -1044,4 +1112,193 @@ get.num.nodes <- function(model)  {
     }
 
     return(get_n_nodes(model$cpp_obj$ptr, model$params$ndim > 1, model$nthreads))
+}
+
+#' @title Append isolation trees from one model into another
+#' @description This function is intended for merging models \bold{that use the same hyperparameters} but
+#' were fitted to different subsets of data.
+#' 
+#' In order for this to work, both models must have been fit to data in the same format - 
+#' that is, same number of columns, same order of the columns, and same column types, although
+#' not necessarily same object classes (e.g. can mix `base::matrix` and `Matrix::dgCMatrix`).
+#' 
+#' If the data has categorical variables, the models should have been built with parameter
+#' `recode_categ=FALSE` in the call to \link{isolation.forest} (which is \bold{not} the
+#' default), and the categorical columns passed as type `factor` with the same `levels` -
+#' otherwise different models might be using different encodings for each categorical column,
+#' which will not be preserved as only the trees will be appended without any associated metadata.
+#' 
+#' Note that this function will not perform any checks on the inputs, and passing two incompatible
+#' models (e.g. fit to different numbers of columns) will result in wrong results and
+#' potentially crashing the R process when using it.
+#' 
+#' \bold{Important:} the result of this function must be reassigned to `model` in order for it
+#' to work properly - e.g. `model <- append.trees(model, other)`.
+#' @param model An Isolation Forest model (as returned by function \link{isolation.forest})
+#' to which trees from `other` (another Isolation Forest model) will be appended into.
+#' @param other Another Isolation Forest model, from which trees will be appended into
+#' `model`. It will not be modified during the call to this function.
+#' @return The updated `model` object, to which `model` needs to be reassigned
+#' (i.e. you need to use it as follows: `model <- append.trees(model, other)`).
+#' @examples 
+#' library(isotree)
+#' 
+#' ### Generate two random sets of data
+#' m <- 100
+#' n <- 2
+#' set.seed(1)
+#' X1 <- matrix(rnorm(m*n), nrow=m)
+#' X2 <- matrix(rnorm(m*n), nrow=m)
+#' 
+#' ### Fit a model to each dataset
+#' iso1 <- isolation.forest(X1, ntrees=3, nthreads=1)
+#' iso2 <- isolation.forest(X2, ntrees=2, nthreads=1)
+#' 
+#' ### Check the terminal nodes for some observations
+#' nodes1 <- predict(iso1, head(X1, 3), type="tree_num")
+#' nodes2 <- predict(iso2, head(X1, 3), type="tree_num")
+#' 
+#' ### Append the trees from 'iso1' into 'iso1'
+#' iso1 <- append.trees(iso1, iso2)
+#' 
+#' ### Check that it predicts the same as the two models
+#' nodes.comb <- predict(iso1, head(X1, 3), type="tree_num")
+#' nodes.comb$tree_num == cbind(nodes1$tree_num, nodes2$tree_num)
+#' 
+#' ### The new predicted scores will be a weighted average
+#' ### (Be aware that, due to round-off, it will not match with '==')
+#' nodes.comb$score
+#' (3*nodes1$score + 2*nodes2$score) / 5
+#' @export
+append.trees <- function(model, other) {
+    if (!("isolation_forest" %in% class(model)) || !("isolation_forest" %in% class(other))) {
+        stop("'model' and 'other' must be isolation forest models.")
+    }
+    if ((model$params$ndim == 1) != (other$params$ndim == 1)) {
+        stop("Cannot mix extended and regular isolation forest models (ndim=1).")
+    }
+    if (model$metadata$ncols_cat) {
+        warning("Merging models with categorical features might give wrong results.")
+    }
+    
+    serialized <- append_trees_from_other(model$cpp_obj$ptr,      other$cpp_obj$ptr,
+                                          model$cpp_obj$imp_ptr,  other$cpp_obj$imp_ptr,
+                                          model$params$ndim > 1)
+    model$cpp_obj$serialized <- serialized$serialized
+    if ("imp_ser" %in% names(model)) {
+        model$cpp_obj$imp_ser <- serialized$imp_ser
+    }
+    
+    model$params$ntrees <- model$params$ntrees + other$params$ntrees
+    return(model)
+}
+
+#' @title Export Isolation Forest model
+#' @description Save Isolation Forest model to a serialized file along with its
+#' metadata, in order to be used in the Python or the C++ versions of this package.
+#' 
+#' This function is not meant to be used for passing models to and from R -
+#' in such case, you can use `saveRDS` and `readRDS` instead.
+#' 
+#' Note that, if the model was fitted to a `data.frame`, the column names must be
+#' something exportable as JSON, and must be something that Python's Pandas could
+#' use as column names (e.g. strings/character).
+#' 
+#' It is recommended to visually inspect the produced `.metadata` file in any case.
+#' @details This function will create 2 files: the serialized model, in binary format,
+#' with the name passed in `file`; and a metadata file in JSON format with the same
+#' name but ending in `.metadata`. The second file should \bold{NOT} be edited manually,
+#' except for the field `nthreads` if desired.
+#' 
+#' If the model was built with `build_imputer=TRUE`, there will also be a third binary file
+#' ending in `.imputer`.
+#' 
+#' The metadata will contain, among other things, the encoding that was used for
+#' categorical columns - this is under `data_info.cat_levels`, as an array of arrays by column,
+#' with the first entry for each column corresponding to category 0, second to category 1,
+#' and so on (the C++ version takes them as integers). This metadata is written to a JSON file
+#' using the `jsonlite` package, which must be installed in order for this to work.
+#' 
+#' The serialized file can be used in the C++ version by reading it as a binary raw file
+#' and de-serializing its contents with the `cereal` library or using the provided C++ functions
+#' for de-serialization. If using `ndim=1`, it will be an object of class `IsoForest`, and if
+#' using `ndim>1`, will be an object of class `ExtIsoForest`. The imputer file, if produced, will
+#' be an object of class `Imputer`.
+#' 
+#' The metadata is not used in the C++ version, but is necessary for the Python version.
+#' 
+#' Note that the model treats boolean/logical variables as categorical. Thus, if the model was fit
+#' to a `data.frame` with boolean columns, when importing this model into C++, they need to be
+#' encoded in the same order - e.g. the model might encode `TRUE` as zero and `FALSE`
+#' as one - you need to look at the metadata for this.
+#' @param model An Isolation Forest model as returned by function \link{isolation.forest}.
+#' @param file File path where to save the model. File connections are not accepted, only
+#' file paths
+#' @param ... Additional arguments to pass to \link{writeBin} - you might want to pass
+#' extra parameters if passing files between different CPU architectures or similar.
+#' @return No return value.
+#' @seealso \link{load.isotree.model} \link{writeBin} \link{unpack.isolation.forest}
+#' @references \url{https://uscilab.github.io/cereal}
+#' @export
+export.isotree.model <- function(model, file, ...) {
+    if (!("isolation_forest" %in% class(model)))
+        stop("This function is only available for isolation forest objects as returned from 'isolation.forest'.")
+    metadata <- export.metadata(model)
+    file.metadata <- paste0(file, ".metadata")
+    jsonlite::write_json(export.metadata(model), file.metadata,
+                         pretty=TRUE, auto_unbox=TRUE)
+    writeBin(model$cpp_obj$serialized, file, ...)
+    if (model$params$build_imputer) {
+        file.imp <- paste0(file, ".imputer")
+        writeBin(model$cpp_obj$imp_ser, file.imp, ...)
+    }
+    return(invisible(NULL))
+}
+
+#' @title Load an Isolation Forest model exported from Python
+#' @description Loads a serialized Isolation Forest model as produced and exported
+#' by the Python version of this package. Note that the metadata must be something
+#' importable in R - e.g. column names must be valid for R (numbers are not valid names for R).
+#' It's recommended to visually inspect the `.metadata` file in any case.
+#' 
+#' This function is not meant to be used for passing models to and from R -
+#' in such case, you can use `saveRDS` and `readRDS` instead.
+#' @param file Path to the saved isolation forest model along with its metadata file,.
+#' and imputer file if produced. Must be a file path, not a file connection.
+#' @details Internally, this function uses `readr::read_file_raw` (from the `readr` package)
+#' and `jsonlite::fromJSON` (from the `jsonlite` package). Be sure to have those installed
+#' and that the files are readable through them.
+#' 
+#' Note: If the model was fit to a ``DataFrame`` using Pandas' own Boolean types,
+#' take a look at the metadata to check if these columns will be taken as booleans
+#' (R logicals) or as categoricals with string values `"True"` or `"False"`.
+#' @return An isolation forest model, as if it had been constructed through
+#' \link{isolation.forest}.
+#' @seealso \link{export.isotree.model} \link{unpack.isolation.forest}
+#' @export
+load.isotree.model <- function(file) {
+    if (!file.exists(file)) stop("'file' does not exist.")
+    metadata.file <- paste0(file, ".metadata")
+    if (!file.exists(metadata.file)) stop("No matching metadata for 'file'.")
+    
+    metadata <- jsonlite::fromJSON(metadata.file,
+                                   simplifyVector = TRUE,
+                                   simplifyDataFrame = FALSE,
+                                   simplifyMatrix = FALSE)
+    
+    this <- take.metadata(metadata)
+    this$cpp_obj$serialized <- readr::read_file_raw(file)
+    if (this$params$ndim == 1)
+        this$cpp_obj$ptr <- deserialize_IsoForest(this$cpp_obj$serialized)
+    else
+        this$cpp_obj$ptr <- deserialize_ExtIsoForest(this$cpp_obj$serialized)
+    
+    imputer.file <- paste0(file, ".imputer")
+    if (file.exists(imputer.file)) {
+        this$cpp_obj$imp_ser <- readr::read_file_raw(imputer.file)
+        this$cpp_obj$imp_ptr <- deserialize_Imputer(this$cpp_obj$imp_ser)
+    }
+    
+    class(this) <- "isolation_forest"
+    return(this)
 }

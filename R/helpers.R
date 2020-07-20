@@ -57,17 +57,17 @@ cast.df.alike <- function(df) {
 }
 
 get.types.dmat <- function() {
-    return(c("matrix", "dgTMatrix"))
+    return(c("matrix"))
 }
 
 get.types.spmat <- function(allow_csr = FALSE, allow_csc = TRUE) {
-    outp <- c("dgCMatrix")
+    outp <- c("dgCMatrix") ### if no CSC, will transpose it later
     if (allow_csc) outp <- c(outp, "matrix.csc")
     if (allow_csr) outp <- c(outp, "matrix.csr")
     return(outp)
 }
 
-process.data <- function(df, sample_weights = NULL, column_weights = NULL) {
+process.data <- function(df, sample_weights = NULL, column_weights = NULL, recode_categ = TRUE) {
     df  <-  cast.df.alike(df)
     dmatrix_types     <-  get.types.dmat()
     spmatrix_types    <-  get.types.spmat()
@@ -104,10 +104,10 @@ process.data <- function(df, sample_weights = NULL, column_weights = NULL) {
                  )
     
     ### Dense matrix
-    if ( max(class(df) %in% dmatrix_types) ) { outp$X_num <- unname(as.numeric(df)) ; return(outp) }
+    if ( any(class(df) %in% dmatrix_types) ) { outp$X_num <- unname(as.numeric(df)) ; return(outp) }
     
     ### Sparse matrix
-    if ( max(class(df) %in% spmatrix_types) ) {
+    if ( any(class(df) %in% spmatrix_types) ) {
         
         if ("dgCMatrix" %in% class(df)) {
             ### From package 'Matrix'
@@ -117,15 +117,15 @@ process.data <- function(df, sample_weights = NULL, column_weights = NULL) {
         } else {
             ### From package 'SparseM'
             outp$Xc         <-  as.numeric(df@ra)
-            outp$Xc_ind     <-  as.integer(df@ia - 1)
-            outp$Xc_indptr  <-  as.integer(df@ja - 1)
+            outp$Xc_ind     <-  as.integer(df@ia - 1L)
+            outp$Xc_indptr  <-  as.integer(df@ja - 1L)
         }
         
         return(outp)
     }
     
     ### Data Frame
-    if ( max(class(df) %in% "data.frame") ) {
+    if ( "data.frame" %in% class(df) ) {
         dtypes_num  <-  c("numeric",   "integer",  "Date",  "POSIXct")
         dtypes_cat  <-  c("character", "factor",   "logical")
         supported_col_types <- c(dtypes_num, dtypes_cat)
@@ -138,20 +138,25 @@ process.data <- function(df, sample_weights = NULL, column_weights = NULL) {
         }
         
         if (any(df_coltypes %in% dtypes_num)) {
-            is_num          <-  unname(as.logical(sapply(df, function(x) max(class(x) %in% dtypes_num))))
+            is_num          <-  unname(as.logical(sapply(df, function(x) any(class(x) %in% dtypes_num))))
             outp$cols_num   <-  names(df)[is_num]
             outp$ncols_num  <-  as.integer(sum(is_num))
             outp$X_num      <-  unname(as.numeric(as.matrix(as.data.frame(lapply(df[, is_num, drop = FALSE], as.numeric)))))
         } else { outp$ncols_num <- as.integer(0) }
         
         if (any(df_coltypes %in% dtypes_cat)) {
-            is_cat          <-  unname(as.logical(sapply(df, function(x) max(class(x) %in% dtypes_cat))))
+            is_cat          <-  unname(as.logical(sapply(df, function(x) any(class(x) %in% dtypes_cat))))
             outp$cols_cat   <-  names(df)[is_cat]
             outp$ncols_cat  <-  as.integer(sum(is_cat))
-            outp$X_cat      <-  as.data.frame(lapply(df[, is_cat, drop = FALSE], factor))
+            if (recode_categ) {
+                outp$X_cat  <-  as.data.frame(lapply(df[, is_cat, drop = FALSE], factor))
+            } else {
+                outp$X_cat  <-  as.data.frame(lapply(df[, is_cat, drop = FALSE],
+                                                     function(x) if("factor" %in% class(x)) x else factor(x)))
+            }
             outp$cat_levs   <-  lapply(outp$X_cat, levels)
             outp$ncat       <-  sapply(outp$cat_levs, NROW)
-            outp$X_cat      <-  as.data.frame(lapply(outp$X_cat, function(x) ifelse(is.na(x), -1, as.integer(x) - 1)))
+            outp$X_cat      <-  as.data.frame(lapply(outp$X_cat, function(x) ifelse(is.na(x), -1L, as.integer(x) - 1L)))
             outp$X_cat      <-  unname(as.integer(as.matrix(outp$X_cat)))
         }
         
@@ -220,7 +225,7 @@ process.data.new <- function(df, metadata, allow_csr = FALSE, allow_csc = TRUE) 
                 outp$X_cat <- as.data.frame(mapply(function(cl, levs) factor(cl, levs),
                                                    outp$X_cat, metadata$cat_levs,
                                                    SIMPLIFY = FALSE, USE.NAMES = FALSE))
-                outp$X_cat <- as.data.frame(lapply(outp$X_cat, function(x) ifelse(is.na(x), -1, as.integer(x) - 1)))
+                outp$X_cat <- as.data.frame(lapply(outp$X_cat, function(x) ifelse(is.na(x), -1L, as.integer(x) - 1L)))
                 outp$X_cat <- unname(as.integer(as.matrix(outp$X_cat)))
             }
             
@@ -236,19 +241,26 @@ process.data.new <- function(df, metadata, allow_csr = FALSE, allow_csc = TRUE) 
         } else {
             if ("dgCMatrix" %in% class(df)) {
                 ### From package 'Matrix'
-                outp$Xc         <-  as.numeric(df@x)
-                outp$Xc_ind     <-  as.integer(df@i)
-                outp$Xc_indptr  <-  as.integer(df@p)
+                if (allow_csc) {
+                    outp$Xc         <-  as.numeric(df@x)
+                    outp$Xc_ind     <-  as.integer(df@i)
+                    outp$Xc_indptr  <-  as.integer(df@p)
+                } else {
+                    df <- Matrix::t(df)
+                    outp$Xr         <-  as.numeric(df@x)
+                    outp$Xr_ind     <-  as.integer(df@i)
+                    outp$Xr_indptr  <-  as.integer(df@p)
+                }
             } else {
                 ### From package 'SparseM'
                 if ("matrix.csc" %in% class(df)) {
                     outp$Xc         <-  as.numeric(df@ra)
-                    outp$Xc_ind     <-  as.integer(df@ia - 1)
-                    outp$Xc_indptr  <-  as.integer(df@ja - 1)
+                    outp$Xc_ind     <-  as.integer(df@ia - 1L)
+                    outp$Xc_indptr  <-  as.integer(df@ja - 1L)
                 } else {
                     outp$Xr         <-  as.numeric(df@ra)
-                    outp$Xr_ind     <-  as.integer(df@ia - 1)
-                    outp$Xr_indptr  <-  as.integer(df@ja - 1)
+                    outp$Xr_ind     <-  as.integer(df@ia - 1L)
+                    outp$Xr_indptr  <-  as.integer(df@ja - 1L)
                 }
             }
         }
@@ -258,13 +270,15 @@ process.data.new <- function(df, metadata, allow_csr = FALSE, allow_csc = TRUE) 
     return(outp)
 }
 
-reconstruct.from.imp <- function(imputed_num, imputed_cat, df, model) {
+reconstruct.from.imp <- function(imputed_num, imputed_cat, df, model, trans_CSC=FALSE) {
     
     if ("dgCMatrix" %in% class(df)) {
         outp     <-  df
+        if (trans_CSC) outp <- Matrix::t(outp)
         outp@x   <-  imputed_num
+        if (trans_CSC) outp <- Matrix::t(outp)
         return(outp)
-    } else if ("matrix.csc" %in% class(df)) {
+    } else if ( any(class(df) %in% c("matrix.csr", "matrix.csc")) ) {
         outp     <-  df
         outp@ra  <-  imputed_num
     } else if (!("data.frame" %in% class(df))) {
@@ -273,7 +287,7 @@ reconstruct.from.imp <- function(imputed_num, imputed_cat, df, model) {
         df_num <- as.data.frame(matrix(imputed_num, nrow = NROW(df)))
         names(df_num) <- model$metadata$cols_num
         
-        df_cat <- as.data.frame(matrix(ifelse(imputed_cat < 0, NA, imputed_cat) + 1, nrow = NROW(df)))
+        df_cat <- as.data.frame(matrix(ifelse(imputed_cat < 0, NA_integer_, imputed_cat) + 1L, nrow = NROW(df)))
         names(df_cat) <- model$metadata$cols_cat
         df_cat <- as.data.frame(mapply(function(x, levs) factor(x, labels = levs),
                                        df_cat, model$metadata$cat_levs,
@@ -285,3 +299,103 @@ reconstruct.from.imp <- function(imputed_num, imputed_cat, df, model) {
     }
 }
 
+export.metadata <- function(model) {
+    data_info <- list(
+        ncols_numeric = model$metadata$ncols_num, ## is in c++
+        ncols_categ = model$metadata$ncols_cat,  ## is in c++
+        cols_numeric = as.list(model$metadata$cols_num),
+        cols_categ = as.list(model$metadata$cols_cat),
+        cat_levels = unname(as.list(model$metadata$cat_levs))
+    )
+    
+    if (NROW(data_info$cat_levels)) {
+        force.to.bool <- function(v) {
+            if (NROW(v) == 2) {
+                if (("TRUE" %in% v) && ("FALSE" %in% v))
+                    v <- as.logical(v)
+            }
+            return(v)
+        }
+        data_info$cat_levels <- lapply(data_info$cat_levels, force.to.bool)
+    }
+
+    model_info <- list(
+        ndim = model$params$ndim,
+        nthreads = model$nthreads,
+        build_imputer = model$params$build_imputer
+    )
+    
+    params <- list(
+        sample_size = model$params$sample_size,
+        ntrees = model$params$ntrees,  ## is in c++
+        ntry = model$params$ntry,
+        max_depth = model$params$max_depth,
+        prob_pick_avg_gain = model$params$prob_pick_avg_gain,
+        prob_pick_pooled_gain = model$params$prob_pick_pooled_gain,
+        prob_split_avg_gain = model$params$prob_split_avg_gain,
+        prob_split_pooled_gain = model$params$prob_split_pooled_gain,
+        min_gain = model$params$min_gain,
+        missing_action = model$params$missing_action,  ## is in c++
+        new_categ_action = model$params$new_categ_action,  ## is in c++
+        categ_split_type = model$params$categ_split_type,  ## is in c++
+        coefs = model$params$coefs,
+        depth_imp = model$params$depth_imp,
+        weigh_imp_rows = model$params$weigh_imp_rows,
+        min_imp_obs = model$params$min_imp_obs,
+        random_seed = model$random_seed,
+        all_perm = model$params$all_perm,
+        coef_by_prop = model$params$coef_by_prop,
+        weights_as_sample_prob = model$params$weights_as_sample_prob,
+        sample_with_replacement = model$params$sample_with_replacement,
+        penalize_range = model$params$penalize_range,
+        weigh_by_kurtosis = model$params$weigh_by_kurtosis,
+        assume_full_distr = model$params$assume_full_distr
+    )
+
+    return(list(data_info = data_info, model_info = model_info, params = params))
+}
+
+take.metadata <- function(metadata) {
+    this <- list(
+        params  =  list(
+            sample_size = metadata$params$sample_size, ntrees = metadata$params$ntrees, ndim = metadata$model_info$ndim,
+            ntry = metadata$params$ntry, max_depth = metadata$params$max_depth,
+            prob_pick_avg_gain = metadata$params$prob_pick_avg_gain,
+            prob_pick_pooled_gain = metadata$params$prob_pick_pooled_gain,
+            prob_split_avg_gain = metadata$params$prob_split_avg_gain,
+            prob_split_pooled_gain = metadata$params$prob_split_pooled_gain,
+            min_gain = metadata$params$min_gain, missing_action = metadata$params$missing_action,
+            new_categ_action = metadata$params$new_categ_action,
+            categ_split_type = metadata$params$categ_split_type,
+            all_perm = metadata$params$all_perm, coef_by_prop = metadata$params$coef_by_prop,
+            weights_as_sample_prob = metadata$params$weights_as_sample_prob,
+            sample_with_replacement = metadata$params$sample_with_replacement,
+            penalize_range = metadata$params$penalize_range,
+            weigh_by_kurtosis = metadata$params$weigh_by_kurtosis,
+            coefs = metadata$params$coefs, assume_full_distr = metadata$params$assume_full_distr,
+            build_imputer = metadata$model_info$build_imputer, min_imp_obs = metadata$params$min_imp_obs,
+            depth_imp = metadata$params$depth_imp, weigh_imp_rows = metadata$params$weigh_imp_rows
+        ),
+        metadata  = list(
+            ncols_num  =  metadata$data_info$ncols_numeric,
+            ncols_cat  =  metadata$data_info$ncols_categ,
+            cols_num   =  unlist(metadata$data_info$cols_numeric),
+            cols_cat   =  unlist(metadata$data_info$cols_categ),
+            cat_levs   =  metadata$data_info$cat_levels
+        ),
+        random_seed  =  metadata$params$random_seed,
+        nthreads     =  metadata$model_info$nthreads,
+        cpp_obj      =  list(
+            ptr         =  NULL,
+            serialized  =  NULL,
+            imp_ptr     =  NULL,
+            imp_ser     =  NULL
+        )
+    )
+    
+    if (NROW(this$metadata$cat_levels))
+        names(this$metadata$cat_levels) <- this$metadata$cols_cat
+    
+    class(this) <- "isolation_forest"
+    return(this)
+}

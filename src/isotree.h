@@ -48,6 +48,7 @@
 #include <math.h>
 #include <limits.h>
 #include <string.h>
+#include <signal.h>
 #include <vector>
 #include <iterator>
 #include <numeric>
@@ -60,7 +61,7 @@
 #include <cstdint>
 #include <iostream>
 #ifndef _FOR_R
-    #include <cstdio> 
+    #include <stdio.h> 
 #else
     extern "C" {
         #include <R_ext/Print.h>
@@ -70,6 +71,13 @@
 #endif
 #ifdef _OPENMP
     #include <omp.h>
+#endif
+#ifdef _ENABLE_CEREAL
+    #include <cereal/archives/binary.hpp>
+    #include <cereal/types/vector.hpp>
+    #include <sstream>
+    #include <string>
+    #include <fstream>
 #endif
 
 /* By default, will use Mersenne-Twister for RNG, but can be switched to something faster */
@@ -91,23 +99,12 @@
 #define square(x) ((x) * (x))
 /* https://stackoverflow.com/questions/2249731/how-do-i-get-bit-by-bit-data-from-an-integer-value-in-c */
 #define extract_bit(number, bit) (((number) >> (bit)) & 1)
-
-#ifndef isnan
-    #ifdef _isnan
-        #define isnan _isnan
-    #else
-        #define isnan(x) ( (x) != (x) )
-    #endif
-#endif
-
 #ifndef isinf
-    #ifdef _finite
-        #define isinf(x) (!_finite(x))
-    #else
-        #define isinf(x) ( (x) >= HUGE_VAL || (x) <= -HUGE_VAL )
-    #endif
+    #define isinf std::isinf
 #endif
-
+#ifndef isnan
+    #define isnan std::isnan
+#endif
 #define is_na_or_inf(x) (isnan(x) || isinf(x))
 
 
@@ -202,8 +199,9 @@ typedef struct IsoTree {
             this->remainder
             );
     }
-    IsoTree() {};
     #endif
+
+    IsoTree() = default;
 
 } IsoTree;
 
@@ -247,8 +245,9 @@ typedef struct IsoHPlane {
             this->remainder
             );
     }
-    IsoHPlane() {};
     #endif
+
+    IsoHPlane() = default;
 } IsoHPlane;
 
 /* Note: don't use long doubles in the outside outputs or there will be issues with MINGW in windows */
@@ -277,8 +276,9 @@ typedef struct IsoForest {
             this->orig_sample_size
             );
     }
-    IsoForest() {};
     #endif
+
+    IsoForest() = default;
 } IsoForest;
 
 typedef struct ExtIsoForest {
@@ -304,8 +304,9 @@ typedef struct ExtIsoForest {
             this->orig_sample_size
             );
     }
-    ExtIsoForest() {};
     #endif
+
+    ExtIsoForest() = default;
 } ExtIsoForest;
 
 typedef struct ImputeNode {
@@ -328,7 +329,7 @@ typedef struct ImputeNode {
             );
     }
     #endif
-    ImputeNode() {};
+    ImputeNode() = default;
 
     ImputeNode(size_t parent)
     {
@@ -360,7 +361,7 @@ typedef struct Imputer {
     }
     #endif
 
-    Imputer() {};
+    Imputer() = default;
 
 } Imputer;
 
@@ -422,6 +423,7 @@ typedef struct {
     size_t ndim;        /* only for extended model */
     size_t ntry;        /* only for extended model */
     CoefType coef_type; /* only for extended model */
+    bool coef_by_prop;  /* only for extended model */
 
     bool calc_dist;     /* checkbox for calculating distances on-the-fly */
     bool calc_depth;    /* checkbox for calculating depths on-the-fly */
@@ -531,6 +533,8 @@ typedef struct WorkerForSimilarity {
     std::vector<double> weights_arr;
     std::vector<double> comb_val;
     std::vector<double> tmat_sep;
+    std::vector<double> rmat;
+    size_t              n_from;
     bool                assume_full_distr; /* doesn't need to have one copy per worker */
 } WorkerForSimilarity;
 
@@ -550,11 +554,12 @@ typedef struct {
 /* Function prototypes */
 
 /* fit_model.cpp */
+extern bool interrupt_switch;
 int fit_iforest(IsoForest *model_outputs, ExtIsoForest *model_outputs_ext,
                 double numeric_data[],  size_t ncols_numeric,
                 int    categ_data[],    size_t ncols_categ,    int ncat[],
                 double Xc[], sparse_ix Xc_ind[], sparse_ix Xc_indptr[],
-                size_t ndim, size_t ntry, CoefType coef_type,
+                size_t ndim, size_t ntry, CoefType coef_type, bool coef_by_prop,
                 double sample_weights[], bool with_replacement, bool weight_as_sample,
                 size_t nrows, size_t sample_size, size_t ntrees, size_t max_depth,
                 bool   limit_depth, bool penalize_range,
@@ -572,7 +577,7 @@ int add_tree(IsoForest *model_outputs, ExtIsoForest *model_outputs_ext,
              double numeric_data[],  size_t ncols_numeric,
              int    categ_data[],    size_t ncols_categ,    int ncat[],
              double Xc[], sparse_ix Xc_ind[], sparse_ix Xc_indptr[],
-             size_t ndim, size_t ntry, CoefType coef_type,
+             size_t ndim, size_t ntry, CoefType coef_type, bool coef_by_prop,
              double sample_weights[], size_t nrows, size_t max_depth,
              bool   limit_depth,   bool penalize_range,
              double col_weights[], bool weigh_by_kurt,
@@ -657,7 +662,8 @@ void get_num_nodes(ExtIsoForest &model_outputs, sparse_ix *restrict n_nodes, spa
 void calc_similarity(double numeric_data[], int categ_data[],
                      double Xc[], sparse_ix Xc_ind[], sparse_ix Xc_indptr[],
                      size_t nrows, int nthreads, bool assume_full_distr, bool standardize_dist,
-                     IsoForest *model_outputs, ExtIsoForest *model_outputs_ext, double tmat[]);
+                     IsoForest *model_outputs, ExtIsoForest *model_outputs_ext,
+                     double tmat[], double rmat[], size_t n_from);
 void traverse_tree_sim(WorkerForSimilarity   &workspace,
                        PredictionData        &prediction_data,
                        IsoForest             &model_outputs,
@@ -672,12 +678,14 @@ void gather_sim_result(std::vector<WorkerForSimilarity> *worker_memory,
                        std::vector<WorkerMemory> *worker_memory_m,
                        PredictionData *prediction_data, InputData *input_data,
                        IsoForest *model_outputs, ExtIsoForest *model_outputs_ext,
-                       double *restrict tmat, size_t ntrees, bool assume_full_distr,
+                       double *restrict tmat, double *restrict rmat, size_t n_from,
+                       size_t ntrees, bool assume_full_distr,
                        bool standardize_dist, int nthreads);
 void initialize_worker_for_sim(WorkerForSimilarity  &workspace,
                                PredictionData       &prediction_data,
                                IsoForest            *model_outputs,
                                ExtIsoForest         *model_outputs_ext,
+                               size_t                n_from,
                                bool                  assume_full_distr);
 
 /* impute.cpp */
@@ -771,6 +779,10 @@ void increase_comb_counter(size_t ix_arr[], size_t st, size_t end, size_t n,
                            double *restrict counter, double *restrict weights, double exp_remainder);
 void increase_comb_counter(size_t ix_arr[], size_t st, size_t end, size_t n,
                            double counter[], std::unordered_map<size_t, double> &weights, double exp_remainder);
+void increase_comb_counter_in_groups(size_t ix_arr[], size_t st, size_t end, size_t split_ix, size_t n,
+                                     double counter[], double exp_remainder);
+void increase_comb_counter_in_groups(size_t ix_arr[], size_t st, size_t end, size_t split_ix, size_t n,
+                                     double *restrict counter, double *restrict weights, double exp_remainder);
 void tmat_to_dense(double *restrict tmat, double *restrict dmat, size_t n, bool diag_to_one);
 double calc_sd_raw(size_t cnt, long double sum, long double sum_sq);
 long double calc_sd_raw_l(size_t cnt, long double sum, long double sum_sq);
@@ -806,6 +818,9 @@ void get_categs(size_t ix_arr[], int x[], size_t st, size_t end, int ncat,
                 MissingAction missing_action, char categs[], size_t &npresent, bool &unsplittable);
 long double calculate_sum_weights(std::vector<size_t> &ix_arr, size_t st, size_t end, size_t curr_depth,
                                   std::vector<double> &weights_arr, std::unordered_map<size_t, double> &weights_map);
+void set_interrup_global_variable(int s);
+int return_EXIT_SUCCESS();
+int return_EXIT_FAILURE();
 
 
 
@@ -871,6 +886,42 @@ double eval_guided_crit(size_t *restrict ix_arr, size_t st, size_t end, int *res
                         size_t *restrict buffer_cnt, size_t *restrict buffer_pos, double *restrict buffer_prob,
                         int &chosen_cat, char *restrict split_categ, char *restrict buffer_split,
                         GainCriterion criterion, double min_gain, bool all_perm, MissingAction missing_action, CategSplit cat_split_type);
+
+/* merge_models.cpp */
+void merge_models(IsoForest*     model,      IsoForest*     other,
+                  ExtIsoForest*  ext_model,  ExtIsoForest*  ext_other,
+                  Imputer*       imputer,    Imputer*       iother);
+
+#ifdef _ENABLE_CEREAL
+/* serialize.cpp */
+void serialize_isoforest(IsoForest &model, std::ostream &output);
+void serialize_isoforest(IsoForest &model, const char *output_file_path);
+std::string serialize_isoforest(IsoForest &model);
+void deserialize_isoforest(IsoForest &output_obj, std::istream &serialized);
+void deserialize_isoforest(IsoForest &output_obj, const char *input_file_path);
+void deserialize_isoforest(IsoForest &output_obj, std::string &serialized, bool move_str);
+void serialize_ext_isoforest(ExtIsoForest &model, std::ostream &output);
+void serialize_ext_isoforest(ExtIsoForest &model, const char *output_file_path);
+std::string serialize_ext_isoforest(ExtIsoForest &model);
+void deserialize_ext_isoforest(ExtIsoForest &output_obj, std::istream &serialized);
+void deserialize_ext_isoforest(ExtIsoForest &output_obj, const char *input_file_path);
+void deserialize_ext_isoforest(ExtIsoForest &output_obj, std::string &serialized, bool move_str);
+void serialize_imputer(Imputer &imputer, std::ostream &output);
+void serialize_imputer(Imputer &imputer, const char *output_file_path);
+std::string serialize_imputer(Imputer &imputer);
+void deserialize_imputer(Imputer &output_obj, std::istream &serialized);
+void deserialize_imputer(Imputer &output_obj, const char *input_file_path);
+void deserialize_imputer(Imputer &output_obj, std::string &serialized, bool move_str);
+#ifdef _MSC_VER
+void serialize_isoforest(IsoForest &model, const wchar_t *output_file_path);
+void deserialize_isoforest(IsoForest &output_obj, const wchar_t *input_file_path);
+void serialize_ext_isoforest(ExtIsoForest &model, const wchar_t *output_file_path);
+void deserialize_ext_isoforest(ExtIsoForest &output_obj, const wchar_t *input_file_path);
+void serialize_imputer(Imputer &imputer, const wchar_t *output_file_path);
+void deserialize_imputer(Imputer &output_obj, const wchar_t *input_file_path);
+#endif /* _MSC_VER */
+bool has_msvc();
+#endif /* _ENABLE_CEREAL */
 
 /* dealloc.cpp */
 void dealloc_IsoForest(IsoForest &model_outputs);
