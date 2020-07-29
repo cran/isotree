@@ -1,4 +1,4 @@
-25b2f66fcff82fcb4a56ec7236fa2ea2 *DESCRIPTION
+d2069f7eef62dfa0479be5ffe6e00e24 *DESCRIPTION
 f3aa3bf46266e49a4527e09d3bf7f229 *LICENSE
 73018779445e3cce070a4104ee658414 *NAMESPACE
 6552d8571fb3c40fe45de94ae2c3c138 *R/RcppExports.R
@@ -29,5 +29,5 @@ b65948445efb7503daf2ec9c5ab1b4fb *src/helpers_iforest.cpp
 0dc885d31557a85d954a3dfade3aba08 *src/merge_models.cpp
 9dccba98f111a030328e9b99fc2ac8c9 *src/mult.cpp
 b717bcdf002cb005312ab45346519661 *src/predict.cpp
-66d38ae1f2a4125f34d580ad720ad6d8 *src/serialize.cpp
+7bd3506418e458a9f6b54d0eb922627e *src/serialize.cpp
 bbc3b46ae03786926af8790e61068b81 *src/utils.cpp
