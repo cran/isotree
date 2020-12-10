@@ -39,17 +39,25 @@ isolation.forest(
   output_dist = FALSE,
   square_dist = FALSE,
   random_seed = 1,
+  handle_interrupt = TRUE,
   nthreads = parallel::detectCores()
 )
 }
 \arguments{
-\item{df}{Data to which to fit the model. Can pass a `data.frame`, `matrix`, or sparse matrix (in CSC format,
-either from package `Matrix` or from package `SparseM`). If passing a `data.frame`, will assume that columns are:
+\item{df}{Data to which to fit the model. Supported inputs type are:\itemize{
+\item A `data.frame`, also accepted as `data.table` or `tibble`.
+\item A `matrix` object from base R.
+\item A sparse matrix in CSC format, either from package `Matrix` (class `dgCMatrix`) or
+from package `SparseM` (class `matrix.csc`).
+}
+
+If passing a `data.frame`, will assume that columns are:
 \itemize{
   \item Numerical, if they are of types `numeric`, `integer`, `Date`, `POSIXct`.
   \item Categorical, if they are of type `character`, `factor`, `bool`.
 }
-Other column types are not supported.}
+Other column types are not supported. Note that it does not support inputs with a number of rows or number of columns
+above that of `.Machine$integer.max` (typically 2^31-1).}
 
 \item{sample_weights}{Sample observation weights for each row of `df`, with higher weights indicating either higher sampling
 probability (i.e. the observation has a larger effect on the fitted model, if using sub-samples), or
@@ -71,7 +79,7 @@ Recommended value in references [1], [2], [3], [4] is 256, while the default val
 \item{ntrees}{Number of binary trees to build for the model. Recommended value in reference [1] is 100, while the
 default value in the author's code in reference [5] is 10. In general, the number of trees required for good results
 is higher when (a) there are many columns, (b) there are categorical variables, (c) categorical variables have many
-categories, (d) you are using large `ndim`.}
+categories, (d) `ndim` is high.}
 
 \item{ndim}{Number of columns to combine to produce a split. If passing 1, will produce the single-variable model described
 in references [1] and [2], while if passing values greater than 1, will produce the extended model described in
@@ -92,31 +100,40 @@ the remaining isolation depth for them is estimated assuming the data and splits
 for references [1], [2], [3], [4] is the same as the default here, but it's recommended to pass higher values if
 using the model for purposes other than outlier detection.}
 
-\item{prob_pick_avg_gain}{Probability of making each split in the single-variable model by choosing a column and split
-point in that same column as both the column and split point that gives the largest averaged gain (as proposed in
-reference [4]) across all available columns and possible splits in each column. Note that this implies evaluating every
-single column in the sample data when this type of split happens, which will potentially make the model fitting much slower,
+\item{prob_pick_avg_gain}{\itemize{
+\item For the single-variable model (`ndim=1`), this parameter indicates the probability
+of making each split by choosing a column and split point in that
+same column as both the column and split point that gives the largest averaged gain (as proposed in [4]) across
+all available columns and possible splits in each column. Note that this implies evaluating every single column
+in the sample data when this type of split happens, which will potentially make the model fitting much slower,
 but has no impact on prediction time. For categorical variables, will take the expected standard deviation that
 would be gotten if the column were converted to numerical by assigning to each category a random number `~ Unif(0, 1)`
-and calculate gain with those assumed standard deviations. For the extended model, this parameter indicates the
-probability that the split point in the chosen linear combination of variables will be decided by this averaged gain
-criterion. Compared to a pooled average, this tends to result in more cases in which a single observation or very few
-of them are put into one branch. Recommended to use sub-samples (parameter `sample_size`) when passing this parameter.
+and calculate gain with those assumed standard deviations.
+\item For the extended model, this parameter indicates the probability that the
+split point in the chosen linear combination of variables will be decided by this averaged gain criterion.
+}
+Compared to a pooled average, this tends to result in more cases in which a single observation or very few of them
+are put into one branch. Recommended to use sub-samples (parameter `sample_size`) when passing this parameter.
 Note that, since this will created isolated nodes faster, the resulting object will be lighter (use less memory).
 When splits are not made according to any of `prob_pick_avg_gain`, `prob_pick_pooled_gain`, `prob_split_avg_gain`,
 `prob_split_pooled_gain`, both the column and the split point are decided at random. Default setting for 
 references [1], [2], [3] is zero, and default for reference [4] is 1. This is the randomization parameter
-that can be passed to the author's original code in [5]. Note that, if passing value = 1 with no sub-sampling and using the
+that can be passed to the author's original code in [5]. Note that, if passing a value of 1 (100\%) with no sub-sampling and using the
 single-variable model, every single tree will have the exact same splits.}
 
-\item{prob_pick_pooled_gain}{Probability of making each split in the single-variable model by choosing a column and
-split point in that same column as both the column and split point that gives the largest pooled gain (as used in
-decision tree classifiers such as C4.5 in reference [7]) across all available columns and possible splits in each column.
-Note that this implies evaluating every single column in the sample data when this type of split happens, which
+\item{prob_pick_pooled_gain}{\itemize{
+\item For the single-variable model (`ndim=1`), this parameter indicates the probability
+of making each split by choosing a column and split point in that
+same column as both the column and split point that gives the largest pooled gain (as used in decision tree
+classifiers such as C4.5 in [7]) across all available columns and possible splits in each column. Note
+that this implies evaluating every single column in the sample data when this type of split happens, which
 will potentially make the model fitting much slower, but has no impact on prediction time. For categorical
-variables, will use shannon entropy instead (like in reference [7]). For the extended model, this parameter indicates
-the probability that the split point in the chosen linear combination of variables will be decided by this pooled gain
-criterion. Compared to a simple average, this tends to result in more evenly-divided splits and more clustered
+variables, will use shannon entropy instead (like in [7]).
+\item For the extended model, this parameter indicates the probability
+that the split point in the chosen linear combination of variables will be decided by this pooled gain
+criterion.
+}
+Compared to a simple average, this tends to result in more evenly-divided splits and more clustered
 groups when they are smaller. Recommended to pass higher values when used for imputation of missing values.
 When used for outlier detection, higher values of this parameter result in models that are able to better flag
 outliers in the training data, but generalize poorly to outliers in new data and to values of variables
@@ -125,7 +142,7 @@ tend to flag too many outliers.
 Note that, since this makes the trees more even and thus it takes more steps to produce isolated nodes,
 the resulting object will be heavier (use more memory). When splits are not made according to any of `prob_pick_avg_gain`,
 `prob_pick_pooled_gain`, `prob_split_avg_gain`, `prob_split_pooled_gain`, both the column and the split point
-are decided at random. Note that, if passing value = 1 with no sub-sampling and using the single-variable model,
+are decided at random. Note that, if passing value = 1 (100\%) with no sub-sampling and using the single-variable model,
 every single tree will have the exact same splits.}
 
 \item{prob_split_avg_gain}{Probability of making each split by selecting a column at random and determining the split point as
@@ -270,6 +287,15 @@ p(i, j) = ((i - 1) * (n - i/2) + j - i).}
 
 \item{random_seed}{Seed that will be used to generate random numbers used by the model.}
 
+\item{handle_interrupt}{Whether to handle interrupt signals in the C++ code. If passing `TRUE`,
+when it receives an interrupt signal while fitting the model, will halt before the procedure
+finishes, but this has unintended side effects such as setting the interrupt handle for the rest
+of the R session to this package's interrupt switch (which will print an error message), and
+might cause trouble when interrupting the procedure from some REST framework such as plumber.
+If passing `FALSE`, the C++ code (which fits the model) will not react to interrupt signals,
+thus interrupting it will not do anything until  the model is fitted and control goes back
+to R, but there will not be any side effects with respect to interrupt signals.}
+
 \item{nthreads}{Number of parallel threads to use. If passing a negative number, will use
 the maximum number of available threads in the system. Note that, the more threads,
 the more memory will be allocated, even if the thread does not end up being used.}
@@ -300,7 +326,7 @@ distances by checking the depth after which two observations become separated, a
 trees beyond balanced-tree limit. Offers options to vary between randomized and deterministic splits too.
 
 Note that the default parameters set up for this implementation will not scale to large datasets. In particular,
-if the amount of data is large, you might want to set a smaller sample size for each tree, and fit fewer of them.
+if the amount of data is large, it's avised to want to set a smaller sample size for each tree, and fit fewer of them. As well, the default option for `missing_action` might slow things down significantly.
 
 The model offers many tunable parameters. The most likely candidate to tune is `prob_pick_pooled_gain`, for
 which higher values tend to result in a better ability to flag outliers in the training data (`df`)
@@ -317,9 +343,9 @@ data beforehand.
 
 When using sparse matrices, calculations such as standard deviations, gain, and kurtosis, will use procedures
 that rely on calculating sums of squared numbers. This is not a problem if most of the entries are zero and the
-numbers are small, but if you pass dense matrices as sparse and/or the entries in the sparse matrices have values
-in wildly different orders of magnitude (e.g. 0.0001 and 10000000), the calculations might fail due to loss of
-numeric precision, and the results might not make sense. For dense matrices it uses more numerically-robust
+numbers are small, but if passing dense matrices as sparse and/or the entries in the sparse matrices have values
+in wildly different orders of magnitude (e.g. 0.0001 and 10000000), the calculations might be incorrect due to loss of
+numeric precision, and the results might not be as good. For dense matrices it uses more numerically-robust
 techniques (which would add a large computational overhead in sparse matrices), so it's not a problem to have values
 with different orders of magnitude.
 }
@@ -328,9 +354,9 @@ with different orders of magnitude.
 ### (Random data from a standard normal distribution)
 library(isotree)
 set.seed(1)
-n <- 100
-m <- 2
-X <- matrix(rnorm(n * m), nrow = n)
+m <- 100
+n <- 2
+X <- matrix(rnorm(m * n), nrow = m)
 
 ### Will now add obvious outlier point (3, 3) to the data
 X <- rbind(X, c(3, 3))
@@ -431,9 +457,9 @@ library(isotree)
 
 ### Generate random data with 3 dimensions
 set.seed(1)
-n <- 100
-m <- 3
-X <- matrix(rnorm(n * m), nrow=n, ncol=m)
+m <- 100
+n <- 3
+X <- matrix(rnorm(m * n), nrow=m, ncol=n)
 
 ### Fit isolation forest model
 iso <- isolation.forest(X, ntrees=100, nthreads=1)

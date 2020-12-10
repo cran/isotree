@@ -22,7 +22,7 @@
 *     [9] Cortes, David. "Imputing missing values with unsupervised random trees." arXiv preprint arXiv:1911.06646 (2019).
 * 
 *     BSD 2-Clause License
-*     Copyright (c) 2019, David Cortes
+*     Copyright (c) 2020, David Cortes
 *     All rights reserved.
 *     Redistribution and use in source and binary forms, with or without
 *     modification, are permitted provided that the following conditions are met:
@@ -213,7 +213,7 @@ typedef struct IsoHPlane {
     std::vector<std::vector<double>> cat_coef;
     std::vector<int>      chosen_cat;
     std::vector<double>   fill_val;
-    std::vector<double>   fill_new;
+    std::vector<double>   fill_new; /* <- when using single categ, coef will be here */
 
     double   split_point;
     size_t   hplane_left;
@@ -545,9 +545,8 @@ typedef struct {
     size_t  split_ix;
     size_t  end;
     std::vector<size_t> ix_arr;
-    std::unordered_map<size_t, double> weights_map;
-    std::vector<double> weights_arr;
     std::vector<bool>   cols_possible;
+    std::unique_ptr<double[]> weights_arr;
     std::discrete_distribution<size_t> col_sampler;
 } RecursionState;
 
@@ -572,7 +571,7 @@ int fit_iforest(IsoForest *model_outputs, ExtIsoForest *model_outputs_ext,
                 CategSplit cat_split_type, NewCategAction new_cat_action,
                 bool   all_perm, Imputer *imputer, size_t min_imp_obs,
                 UseDepthImp depth_imp, WeighImpRows weigh_imp_rows, bool impute_at_fit,
-                uint64_t random_seed, int nthreads);
+                uint64_t random_seed, bool handle_interrupt, int nthreads);
 int add_tree(IsoForest *model_outputs, ExtIsoForest *model_outputs_ext,
              double numeric_data[],  size_t ncols_numeric,
              int    categ_data[],    size_t ncols_categ,    int ncat[],
@@ -922,6 +921,29 @@ void deserialize_imputer(Imputer &output_obj, const wchar_t *input_file_path);
 #endif /* _MSC_VER */
 bool has_msvc();
 #endif /* _ENABLE_CEREAL */
+
+/* sql.cpp */
+std::vector<std::string> generate_sql(IsoForest *model_outputs, ExtIsoForest *model_outputs_ext,
+                                      std::vector<std::string> &numeric_colnames, std::vector<std::string> &categ_colnames,
+                                      std::vector<std::vector<std::string>> &categ_levels,
+                                      bool output_tree_num, bool index1, bool single_tree, size_t tree_num,
+                                      int nthreads);
+std::string generate_sql_with_select_from(IsoForest *model_outputs, ExtIsoForest *model_outputs_ext,
+                                          std::string &table_from, std::string &select_as,
+                                          std::vector<std::string> &numeric_colnames, std::vector<std::string> &categ_colnames,
+                                          std::vector<std::vector<std::string>> &categ_levels,
+                                          bool index1, int nthreads);
+void generate_tree_rules(std::vector<IsoTree> *trees, std::vector<IsoHPlane> *hplanes, bool output_score,
+                         size_t curr_ix, bool index1, std::string &prev_cond, std::vector<std::string> &node_rules,
+                         std::vector<std::string> &conditions_left, std::vector<std::string> &conditions_right);
+void extract_cond_isotree(IsoForest &model, IsoTree &tree,
+                          std::string &cond_left, std::string &cond_right,
+                          std::vector<std::string> &numeric_colnames, std::vector<std::string> &categ_colnames,
+                          std::vector<std::vector<std::string>> &categ_levels);
+void extract_cond_ext_isotree(ExtIsoForest &model, IsoHPlane &hplane,
+                              std::string &cond_left, std::string &cond_right,
+                              std::vector<std::string> &numeric_colnames, std::vector<std::string> &categ_colnames,
+                              std::vector<std::vector<std::string>> &categ_levels);
 
 /* dealloc.cpp */
 void dealloc_IsoForest(IsoForest &model_outputs);
