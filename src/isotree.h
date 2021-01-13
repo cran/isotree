@@ -48,7 +48,6 @@
 #include <math.h>
 #include <limits.h>
 #include <string.h>
-#include <signal.h>
 #include <vector>
 #include <iterator>
 #include <numeric>
@@ -79,6 +78,12 @@
     #include <string>
     #include <fstream>
 #endif
+#ifdef _FOR_R
+    #include <Rcpp.h>
+#endif
+#include <signal.h>
+typedef void (*sig_t_)(int);
+
 
 /* By default, will use Mersenne-Twister for RNG, but can be switched to something faster */
 #ifdef _USE_MERSENNE_TWISTER
@@ -571,7 +576,7 @@ int fit_iforest(IsoForest *model_outputs, ExtIsoForest *model_outputs_ext,
                 CategSplit cat_split_type, NewCategAction new_cat_action,
                 bool   all_perm, Imputer *imputer, size_t min_imp_obs,
                 UseDepthImp depth_imp, WeighImpRows weigh_imp_rows, bool impute_at_fit,
-                uint64_t random_seed, bool handle_interrupt, int nthreads);
+                uint64_t random_seed, int nthreads);
 int add_tree(IsoForest *model_outputs, ExtIsoForest *model_outputs_ext,
              double numeric_data[],  size_t ncols_numeric,
              int    categ_data[],    size_t ncols_categ,    int ncat[],
@@ -818,6 +823,20 @@ void get_categs(size_t ix_arr[], int x[], size_t st, size_t end, int ncat,
 long double calculate_sum_weights(std::vector<size_t> &ix_arr, size_t st, size_t end, size_t curr_depth,
                                   std::vector<double> &weights_arr, std::unordered_map<size_t, double> &weights_map);
 void set_interrup_global_variable(int s);
+#ifdef _FOR_PYTHON
+bool cy_check_interrupt_switch();
+void cy_tick_off_interrupt_switch();
+#endif
+class SignalSwitcher
+{
+public:
+    sig_t_ old_sig;
+    bool is_active;
+    SignalSwitcher();
+    ~SignalSwitcher();
+    void restore_handle();
+};
+void check_interrupt_switch(SignalSwitcher &ss);
 int return_EXIT_SUCCESS();
 int return_EXIT_FAILURE();
 
@@ -891,7 +910,7 @@ void merge_models(IsoForest*     model,      IsoForest*     other,
                   ExtIsoForest*  ext_model,  ExtIsoForest*  ext_other,
                   Imputer*       imputer,    Imputer*       iother);
 
-#ifdef _ENABLE_CEREAL
+#if defined(_ENABLE_CEREAL) || defined(_FOR_PYTHON)
 /* serialize.cpp */
 void serialize_isoforest(IsoForest &model, std::ostream &output);
 void serialize_isoforest(IsoForest &model, const char *output_file_path);
@@ -920,7 +939,17 @@ void serialize_imputer(Imputer &imputer, const wchar_t *output_file_path);
 void deserialize_imputer(Imputer &output_obj, const wchar_t *input_file_path);
 #endif /* _MSC_VER */
 bool has_msvc();
-#endif /* _ENABLE_CEREAL */
+#ifdef _FOR_PYTHON
+void serialize_isoforest(IsoForest &model, void *output_file_path);
+void deserialize_isoforest(IsoForest &output_obj, void *input_file_path);
+void serialize_ext_isoforest(ExtIsoForest &model, void *output_file_path);
+void deserialize_ext_isoforest(ExtIsoForest &output_obj, void *input_file_path);
+void serialize_imputer(Imputer &imputer, void *output_file_path);
+void deserialize_imputer(Imputer &output_obj, void *input_file_path);
+bool py_should_use_char();
+bool has_cereal();
+#endif /* _FOR_PYTHON */
+#endif /* _ENABLE_CEREAL || _FOR_PYTON */
 
 /* sql.cpp */
 std::vector<std::string> generate_sql(IsoForest *model_outputs, ExtIsoForest *model_outputs_ext,

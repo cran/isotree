@@ -45,7 +45,9 @@
 #ifdef _FOR_R
 
 #include <Rcpp.h>
+#include <Rcpp/unwindProtect.h>
 // [[Rcpp::plugins(cpp11)]]
+// [[Rcpp::plugins(unwindProtect)]]
 
 /* This is to serialize the model objects */
 // [[Rcpp::depends(Rcereal)]]
@@ -56,6 +58,11 @@
 
 /* This is the package's header */
 #include "isotree.h"
+
+SEXP alloc_RawVec(void *data)
+{
+    return Rcpp::RawVector(*(size_t*)data);
+}
 
 /* for model serialization and re-usage in R */
 /* https://stackoverflow.com/questions/18474292/how-to-handle-c-internal-data-structure-in-r-in-order-to-allow-save-load */
@@ -76,7 +83,12 @@ Rcpp::RawVector serialize_cpp_obj(T *model_outputs)
         Rcpp::Rcerr << "Error: model is too big to serialize, resulting object will not be usable.\n" << std::endl;
         return Rcpp::RawVector();
     }
-    Rcpp::RawVector retval((size_t) vec_size);
+
+    Rcpp::RawVector retval;
+    size_t vec_size_ = (size_t)vec_size;
+    retval = Rcpp::unwindProtect(alloc_RawVec, (void*)&vec_size_);
+    if (!retval.size())
+        return retval;
     ss.seekg(0, ss.beg);
     ss.read(reinterpret_cast<char*>(&retval[0]), retval.size());
     return retval;
@@ -96,25 +108,25 @@ SEXP deserialize_cpp_obj(Rcpp::RawVector src)
     return Rcpp::XPtr<T>(model_outputs.release(), true);
 }
 
-// [[Rcpp::export]]
+// [[Rcpp::export(rng = false)]]
 SEXP deserialize_IsoForest(Rcpp::RawVector src)
 {
     return deserialize_cpp_obj<IsoForest>(src);
 }
 
-// [[Rcpp::export]]
+// [[Rcpp::export(rng = false)]]
 SEXP deserialize_ExtIsoForest(Rcpp::RawVector src)
 {
     return deserialize_cpp_obj<ExtIsoForest>(src);
 }
 
-// [[Rcpp::export]]
+// [[Rcpp::export(rng = false)]]
 SEXP deserialize_Imputer(Rcpp::RawVector src)
 {
     return deserialize_cpp_obj<Imputer>(src);
 }
 
-// [[Rcpp::export]]
+// [[Rcpp::export(rng = false)]]
 Rcpp::LogicalVector check_null_ptr_model(SEXP ptr_model)
 {
     return Rcpp::LogicalVector(R_ExternalPtrAddr(ptr_model) == NULL);
@@ -139,7 +151,7 @@ double* set_R_nan_as_C_nan(double *x, size_t n, int nthreads)
     return x;
 }
 
-// [[Rcpp::export]]
+// [[Rcpp::export(rng = false)]]
 Rcpp::List fit_model(Rcpp::NumericVector X_num, Rcpp::IntegerVector X_cat, Rcpp::IntegerVector ncat,
                      Rcpp::NumericVector Xc, Rcpp::IntegerVector Xc_ind, Rcpp::IntegerVector Xc_indptr,
                      Rcpp::NumericVector sample_weights, Rcpp::NumericVector col_weights,
@@ -154,7 +166,7 @@ Rcpp::List fit_model(Rcpp::NumericVector X_num, Rcpp::IntegerVector X_cat, Rcpp:
                      Rcpp::CharacterVector missing_action, bool all_perm,
                      bool build_imputer, bool output_imputations, size_t min_imp_obs,
                      Rcpp::CharacterVector depth_imp, Rcpp::CharacterVector weigh_imp_rows,
-                     int random_seed, bool handle_interrupt, int nthreads)
+                     int random_seed, int nthreads)
 {
     double*     numeric_data_ptr    =  NULL;
     int*        categ_data_ptr      =  NULL;
@@ -300,7 +312,8 @@ Rcpp::List fit_model(Rcpp::NumericVector X_num, Rcpp::IntegerVector X_cat, Rcpp:
                 cat_split_type_C, new_cat_action_C,
                 all_perm, imputer_ptr.get(), min_imp_obs,
                 depth_imp_C, weigh_imp_rows_C, output_imputations,
-                (uint64_t) random_seed, handle_interrupt, nthreads);
+                (uint64_t) random_seed, nthreads);
+    Rcpp::checkUserInterrupt();
 
     if (ret_val == EXIT_FAILURE)
     {
@@ -368,7 +381,7 @@ Rcpp::List fit_model(Rcpp::NumericVector X_num, Rcpp::IntegerVector X_cat, Rcpp:
     return outp;
 }
 
-// [[Rcpp::export]]
+// [[Rcpp::export(rng = false)]]
 Rcpp::RawVector fit_tree(SEXP model_R_ptr, 
                          Rcpp::NumericVector X_num, Rcpp::IntegerVector X_cat, Rcpp::IntegerVector ncat,
                          Rcpp::NumericVector Xc, Rcpp::IntegerVector Xc_ind, Rcpp::IntegerVector Xc_indptr,
@@ -512,7 +525,7 @@ Rcpp::RawVector fit_tree(SEXP model_R_ptr,
         return serialize_cpp_obj(ext_model_ptr);
 }
 
-// [[Rcpp::export]]
+// [[Rcpp::export(rng = false)]]
 void predict_iso(SEXP model_R_ptr, Rcpp::NumericVector outp, Rcpp::IntegerVector tree_num, bool is_extended,
                  Rcpp::NumericVector X_num, Rcpp::IntegerVector X_cat,
                  Rcpp::NumericVector Xc, Rcpp::IntegerVector Xc_ind, Rcpp::IntegerVector Xc_indptr,
@@ -591,7 +604,7 @@ void predict_iso(SEXP model_R_ptr, Rcpp::NumericVector outp, Rcpp::IntegerVector
                     depths_ptr, tree_num_ptr);
 }
 
-// [[Rcpp::export]]
+// [[Rcpp::export(rng = false)]]
 void dist_iso(SEXP model_R_ptr, Rcpp::NumericVector tmat, Rcpp::NumericVector dmat,
               Rcpp::NumericVector rmat, bool is_extended,
               Rcpp::NumericVector X_num, Rcpp::IntegerVector X_cat,
@@ -658,7 +671,7 @@ void dist_iso(SEXP model_R_ptr, Rcpp::NumericVector tmat, Rcpp::NumericVector dm
         tmat_to_dense(tmat_ptr, dmat_ptr, nrows, !standardize_dist);
 }
 
-// [[Rcpp::export]]
+// [[Rcpp::export(rng = false)]]
 Rcpp::List impute_iso(SEXP model_R_ptr, SEXP imputer_R_ptr, bool is_extended,
                       Rcpp::NumericVector X_num, Rcpp::IntegerVector X_cat,
                       Rcpp::NumericVector Xr, Rcpp::IntegerVector Xr_ind, Rcpp::IntegerVector Xr_indptr,
@@ -714,7 +727,7 @@ Rcpp::List impute_iso(SEXP model_R_ptr, SEXP imputer_R_ptr, bool is_extended,
             );
 }
 
-// [[Rcpp::export]]
+// [[Rcpp::export(rng = false)]]
 Rcpp::List get_n_nodes(SEXP model_R_ptr, bool is_extended, int nthreads)
 {
     size_t ntrees;
@@ -744,7 +757,7 @@ Rcpp::List get_n_nodes(SEXP model_R_ptr, bool is_extended, int nthreads)
             );
 }
 
-// [[Rcpp::export]]
+// [[Rcpp::export(rng = false)]]
 Rcpp::List append_trees_from_other(SEXP model_R_ptr, SEXP other_R_ptr,
                                    SEXP imp_R_ptr, SEXP oimp_R_ptr,
                                    bool is_extended)
@@ -789,7 +802,17 @@ Rcpp::List append_trees_from_other(SEXP model_R_ptr, SEXP other_R_ptr,
     return out;
 }
 
-// [[Rcpp::export]]
+SEXP alloc_List(void *data)
+{
+    return Rcpp::List(*(size_t*)data);
+}
+
+SEXP safe_CastString(void *data)
+{
+    return Rcpp::CharacterVector(*(std::string*)data);
+}
+
+// [[Rcpp::export(rng = false)]]
 Rcpp::ListOf<Rcpp::CharacterVector> model_to_sql(SEXP model_R_ptr, bool is_extended,
                                                  Rcpp::CharacterVector numeric_colanmes,
                                                  Rcpp::CharacterVector categ_colnames,
@@ -814,13 +837,14 @@ Rcpp::ListOf<Rcpp::CharacterVector> model_to_sql(SEXP model_R_ptr, bool is_exten
                                                 categ_levels_cpp,
                                                 output_tree_num, true, single_tree, tree_num,
                                                 nthreads);
-    Rcpp::List out(res.size());
+    size_t sz = res.size();
+    Rcpp::List out = Rcpp::unwindProtect(alloc_List, (void*)&sz);
     for (size_t ix = 0; ix < res.size(); ix++)
-        out[ix] = Rcpp::CharacterVector(res[ix]);
+        out[ix] = Rcpp::unwindProtect(safe_CastString, &(res[ix]));
     return out;
 }
 
-// [[Rcpp::export]]
+// [[Rcpp::export(rng = false)]]
 Rcpp::CharacterVector model_to_sql_with_select_from(SEXP model_R_ptr, bool is_extended,
                                                     Rcpp::CharacterVector numeric_colanmes,
                                                     Rcpp::CharacterVector categ_colnames,
@@ -842,11 +866,50 @@ Rcpp::CharacterVector model_to_sql_with_select_from(SEXP model_R_ptr, bool is_ex
     std::string table_from_cpp = Rcpp::as<std::string>(table_from);
     std::string select_as_cpp = Rcpp::as<std::string>(select_as);
 
-    return generate_sql_with_select_from(model_ptr, ext_model_ptr,
-                                         table_from_cpp, select_as_cpp,
-                                         numeric_colanmes_cpp, categ_colanmes_cpp,
-                                         categ_levels_cpp,
-                                         true, nthreads);
+    std::string out = generate_sql_with_select_from(model_ptr, ext_model_ptr,
+                                                    table_from_cpp, select_as_cpp,
+                                                    numeric_colanmes_cpp, categ_colanmes_cpp,
+                                                    categ_levels_cpp,
+                                                    true, nthreads);
+    return Rcpp::unwindProtect(safe_CastString, &out);
+}
+
+// [[Rcpp::export(rng = false)]]
+Rcpp::List copy_cpp_objects(SEXP model_R_ptr, bool is_extended, SEXP imp_R_ptr, bool has_imputer)
+{
+    IsoForest*     model_ptr      =  NULL;
+    ExtIsoForest*  ext_model_ptr  =  NULL;
+    Imputer*       imputer_ptr    =  NULL;
+    if (is_extended)
+        ext_model_ptr  =  static_cast<ExtIsoForest*>(R_ExternalPtrAddr(model_R_ptr));
+    else
+        model_ptr      =  static_cast<IsoForest*>(R_ExternalPtrAddr(model_R_ptr));
+    if (has_imputer)
+        imputer_ptr    =  static_cast<Imputer*>(R_ExternalPtrAddr(imp_R_ptr));
+
+    std::unique_ptr<IsoForest> copy_model(new IsoForest());
+    std::unique_ptr<ExtIsoForest> copy_ext_model(new ExtIsoForest());
+    std::unique_ptr<Imputer> copy_imputer(new Imputer());
+
+    if (model_ptr != NULL) 
+        *copy_model = *model_ptr;
+    if (ext_model_ptr != NULL)
+        *copy_ext_model = *ext_model_ptr;
+    if (imputer_ptr != NULL)
+        *copy_imputer = *imputer_ptr;
+
+    Rcpp::List out = Rcpp::List::create(
+        Rcpp::_["model_ptr"]    =  R_NilValue,
+        Rcpp::_["imputer_ptr"]  =  R_NilValue
+    );
+
+    if (is_extended)
+        out["model_ptr"]    =  Rcpp::XPtr<ExtIsoForest>(copy_ext_model.release(), true);
+    else
+        out["model_ptr"]    =  Rcpp::XPtr<IsoForest>(copy_model.release(), true);
+    if (has_imputer)
+        out["imputer_ptr"]  =  Rcpp::XPtr<Imputer>(copy_imputer.release(), true);
+    return out;
 }
 
 #endif /* _FOR_R */

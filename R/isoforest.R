@@ -236,14 +236,6 @@
 #' just the upper-triangular part, in which the entry for pair (i,j) with 1 <= i < j <= n is located at position
 #' p(i, j) = ((i - 1) * (n - i/2) + j - i).
 #' @param random_seed Seed that will be used to generate random numbers used by the model.
-#' @param handle_interrupt Whether to handle interrupt signals in the C++ code. If passing `TRUE`,
-#' when it receives an interrupt signal while fitting the model, will halt before the procedure
-#' finishes, but this has unintended side effects such as setting the interrupt handle for the rest
-#' of the R session to this package's interrupt switch (which will print an error message), and
-#' might cause trouble when interrupting the procedure from some REST framework such as plumber.
-#' If passing `FALSE`, the C++ code (which fits the model) will not react to interrupt signals,
-#' thus interrupting it will not do anything until  the model is fitted and control goes back
-#' to R, but there will not be any side effects with respect to interrupt signals.
 #' @param nthreads Number of parallel threads to use. If passing a negative number, will use
 #' the maximum number of available threads in the system. Note that, the more threads,
 #' the more memory will be allocated, even if the thread does not end up being used.
@@ -263,8 +255,8 @@
 #' \item Liu, Fei Tony, Kai Ming Ting, and Zhi-Hua Zhou. "Isolation-based anomaly detection." ACM Transactions on Knowledge Discovery from Data (TKDD) 6.1 (2012): 3.
 #' \item Hariri, Sahand, Matias Carrasco Kind, and Robert J. Brunner. "Extended Isolation Forest." arXiv preprint arXiv:1811.02141 (2018).
 #' \item Liu, Fei Tony, Kai Ming Ting, and Zhi-Hua Zhou. "On detecting clustered anomalies using SCiForest." Joint European Conference on Machine Learning and Knowledge Discovery in Databases. Springer, Berlin, Heidelberg, 2010.
-#' \item https://sourceforge.net/projects/iforest/
-#' \item https://math.stackexchange.com/questions/3388518/expected-number-of-paths-required-to-separate-elements-in-a-binary-tree
+#' \item \url{https://sourceforge.net/projects/iforest/}
+#' \item \url{https://math.stackexchange.com/questions/3388518/expected-number-of-paths-required-to-separate-elements-in-a-binary-tree}
 #' \item Quinlan, J. Ross. "C4. 5: programs for machine learning." Elsevier, 2014.
 #' \item Cortes, David. "Distance approximation using Isolation Forests." arXiv preprint arXiv:1910.12362 (2019).
 #' \item Cortes, David. "Imputing missing values with unsupervised random trees." arXiv preprint arXiv:1911.06646 (2019).
@@ -481,8 +473,7 @@ isolation.forest <- function(df, sample_weights = NULL, column_weights = NULL,
                              build_imputer = FALSE, output_imputations = FALSE, min_imp_obs = 3,
                              depth_imp = "higher", weigh_imp_rows = "inverse",
                              output_score = FALSE, output_dist = FALSE, square_dist = FALSE,
-                             random_seed = 1, handle_interrupt = TRUE,
-                             nthreads = parallel::detectCores()) {
+                             random_seed = 1, nthreads = parallel::detectCores()) {
     ### validate inputs
     if (NROW(sample_size) != 1 || sample_size < 5) { stop("'sample_size' must be an integer >= 5.") }
     check.pos.int(ntrees,       "ntrees")
@@ -524,7 +515,6 @@ isolation.forest <- function(df, sample_weights = NULL, column_weights = NULL,
     check.is.bool(square_dist,              "square_dist")
     check.is.bool(build_imputer,            "build_imputer")
     check.is.bool(output_imputations,       "output_imputations")
-    check.is.bool(handle_interrupt,         "handle_interrupt")
     
     s <- prob_pick_avg_gain + prob_pick_pooled_gain + prob_split_avg_gain + prob_split_pooled_gain
     if (s > 1) {
@@ -663,7 +653,7 @@ isolation.forest <- function(df, sample_weights = NULL, column_weights = NULL,
                              missing_action, all_perm,
                              build_imputer, output_imputations, min_imp_obs,
                              depth_imp, weigh_imp_rows,
-                             random_seed, handle_interrupt, nthreads)
+                             random_seed, nthreads)
     
     if (cpp_outputs$err)
         stop("Procedure was interrupted.")
@@ -916,7 +906,7 @@ predict.isolation_forest <- function(object, newdata, type="score", square_mat=F
 #' @details Note that after loading a serialized object from `isolation.forest` through `readRDS` or `load`,
 #' it will only de-serialize the underlying C++ object upon running `predict`, `print`, or `summary`,
 #' so the first run will be slower, while subsequent runs will be faster as the C++ object will already be in-memory.
-#' @return No return value.
+#' @return The same model that was passed as input.
 #' @seealso \link{isolation.forest}
 #' @export
 print.isolation_forest <- function(x, ...) {
@@ -950,6 +940,7 @@ print.isolation_forest <- function(x, ...) {
     cat(sprintf("Consisting of %d trees\n", x$params$ntrees))
     if (x$metadata$ncols_num  > 0)  cat(sprintf("Numeric columns: %d\n",     x$metadata$ncols_num))
     if (x$metadata$ncols_cat  > 0)  cat(sprintf("Categorical columns: %d\n", x$metadata$ncols_cat))
+    return(invisible(x))
 }
 
 
@@ -985,6 +976,9 @@ summary.isolation_forest <- function(object, ...) {
 #' it will lead to issues due to the C++ object being modified but the R object remaining the same, so if this method is used
 #' inside a function, make sure to output the newly-modified R object and have it replace the old R object outside the calling
 #' function too.
+#' 
+#' The model object can be deep copied (including the underlying C++ object) through
+#' function \link{deepcopy.isotree}.
 #' @seealso \link{isolation.forest} \link{unpack.isolation.forest}
 #' @export
 add.isolation.tree <- function(model, df, sample_weights = NULL, column_weights = NULL) {
@@ -1081,7 +1075,8 @@ add.isolation.tree <- function(model, df, sample_weights = NULL, column_weights 
 #' in the same way as `predict` or `print`, but without producing any outputs or messages.
 #' @param model An Isolation Forest object as returned by `isolation.forest`, which has been just loaded from a disk
 #' file through `readRDS`, `load`, or a session restart.
-#' @return No return value. Object is modified in-place.
+#' @return The same model object that was passed as input. Object is modified in-place
+#' however, so it does not need to be re-assigned.
 #' @examples 
 #' ### Warning: this example will generate a temporary .Rds
 #' ### file in your temp folder, and will then delete it
@@ -1133,7 +1128,7 @@ unpack.isolation.forest <- function(model)  {
         model$cpp_obj <- obj_new
     }
     
-    return(invisible(NULL))
+    return(invisible(model))
 }
 
 #' @title Get Number of Nodes per Tree
@@ -1202,6 +1197,9 @@ get.num.nodes <- function(model)  {
 #' it will lead to issues due to the C++ object being modified but the R object remaining the same, so if this method is used
 #' inside a function, make sure to output the newly-modified R object and have it replace the old R object outside the calling
 #' function too.
+#' 
+#' The model object can be deep copied (including the underlying C++ object) through
+#' function \link{deepcopy.isotree}.
 #' @examples 
 #' library(isotree)
 #' 
@@ -1451,6 +1449,23 @@ isotree.to.sql <- function(model, enclose="doublequotes", output_tree_num = FALS
     if (!("isolation_forest" %in% class(model)))
         stop("'model' must be an isolation forest model.")
     
+    if (check_null_ptr_model(model$cpp_obj$ptr)) {
+        obj_new <- model$cpp_obj
+        if (model$params$ndim == 1)
+            ptr_new <- deserialize_IsoForest(model$cpp_obj$serialized)
+        else
+            ptr_new <- deserialize_ExtIsoForest(model$cpp_obj$serialized)
+        obj_new$ptr <- ptr_new
+        
+        if (model$params$build_imputer) {
+            imp_new <- deserialize_Imputer(model$cpp_obj$imp_ser)
+            obj_new$imp_ptr <- imp_new
+        }
+        
+        eval.parent(substitute(model$cpp_obj <- obj_new))
+        model$cpp_obj <- obj_new
+    }
+    
     allowed_enclose <- c("doublequotes", "squarebraces", "none")
     if (NROW(enclose) != 1L)
         stop("'enclose' must be a character variable.")
@@ -1554,4 +1569,40 @@ isotree.to.sql <- function(model, enclose="doublequotes", output_tree_num = FALS
                                              select_as,
                                              model$nthreads))
     }
+}
+
+#' @title Deep-Copy an Isolation Forest Model Object
+#' @details Generates a deep copy of a model object, including the C++ objects inside it.
+#' This function is only meaningful if one intends to call a function that modifies the
+#' internal C++ objects - currently, the only such function are \link{add.isolation.tree}
+#' and \link{append.trees} - as otherwise R's objects follow a copy-on-write logic.
+#' @param model An `isolation_forest` model object.
+#' @return A new `isolation_forest` object, with deep-copied C++ objects.
+#' @export
+deepcopy.isotree <- function(model) {
+    if (!("isolation_forest" %in% class(model)))
+        stop("'deepcopy.isotree' is only applicable for isolation forest model objects.")
+    if (check_null_ptr_model(model$cpp_obj$ptr)) {
+        obj_new <- model$cpp_obj
+        if (model$params$ndim == 1)
+            ptr_new <- deserialize_IsoForest(model$cpp_obj$serialized)
+        else
+            ptr_new <- deserialize_ExtIsoForest(model$cpp_obj$serialized)
+        obj_new$ptr <- ptr_new
+        
+        if (model$params$build_imputer) {
+            imp_new <- deserialize_Imputer(model$cpp_obj$imp_ser)
+            obj_new$imp_ptr <- imp_new
+        }
+        
+        eval.parent(substitute(model$cpp_obj <- obj_new))
+        model$cpp_obj <- obj_new
+    }
+    
+    new_pointers <- copy_cpp_objects(model$cpp_obj$ptr, model$params$ndim > 1,
+                                     model$cpp_obj$imputer_ptr, !is.null(model$cpp_obj$imputer_ptr))
+    new_model <- model
+    new_model$cpp_obj$ptr <- new_pointers$model_ptr
+    new_model$cpp_obj$imp_ptr <- new_pointers$imputer_ptr
+    return(new_model)
 }

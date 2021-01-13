@@ -39,7 +39,6 @@ isolation.forest(
   output_dist = FALSE,
   square_dist = FALSE,
   random_seed = 1,
-  handle_interrupt = TRUE,
   nthreads = parallel::detectCores()
 )
 }
@@ -287,15 +286,6 @@ p(i, j) = ((i - 1) * (n - i/2) + j - i).}
 
 \item{random_seed}{Seed that will be used to generate random numbers used by the model.}
 
-\item{handle_interrupt}{Whether to handle interrupt signals in the C++ code. If passing `TRUE`,
-when it receives an interrupt signal while fitting the model, will halt before the procedure
-finishes, but this has unintended side effects such as setting the interrupt handle for the rest
-of the R session to this package's interrupt switch (which will print an error message), and
-might cause trouble when interrupting the procedure from some REST framework such as plumber.
-If passing `FALSE`, the C++ code (which fits the model) will not react to interrupt signals,
-thus interrupting it will not do anything until  the model is fitted and control goes back
-to R, but there will not be any side effects with respect to interrupt signals.}
-
 \item{nthreads}{Number of parallel threads to use. If passing a negative number, will use
 the maximum number of available threads in the system. Note that, the more threads,
 the more memory will be allocated, even if the thread does not end up being used.}
@@ -542,8 +532,8 @@ if (require("outliertree")) {
 \item Liu, Fei Tony, Kai Ming Ting, and Zhi-Hua Zhou. "Isolation-based anomaly detection." ACM Transactions on Knowledge Discovery from Data (TKDD) 6.1 (2012): 3.
 \item Hariri, Sahand, Matias Carrasco Kind, and Robert J. Brunner. "Extended Isolation Forest." arXiv preprint arXiv:1811.02141 (2018).
 \item Liu, Fei Tony, Kai Ming Ting, and Zhi-Hua Zhou. "On detecting clustered anomalies using SCiForest." Joint European Conference on Machine Learning and Knowledge Discovery in Databases. Springer, Berlin, Heidelberg, 2010.
-\item https://sourceforge.net/projects/iforest/
-\item https://math.stackexchange.com/questions/3388518/expected-number-of-paths-required-to-separate-elements-in-a-binary-tree
+\item \url{https://sourceforge.net/projects/iforest/}
+\item \url{https://math.stackexchange.com/questions/3388518/expected-number-of-paths-required-to-separate-elements-in-a-binary-tree}
 \item Quinlan, J. Ross. "C4. 5: programs for machine learning." Elsevier, 2014.
 \item Cortes, David. "Distance approximation using Isolation Forests." arXiv preprint arXiv:1910.12362 (2019).
 \item Cortes, David. "Imputing missing values with unsupervised random trees." arXiv preprint arXiv:1911.06646 (2019).

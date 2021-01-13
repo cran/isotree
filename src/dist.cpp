@@ -156,6 +156,13 @@ void calc_similarity(double numeric_data[], int categ_data[],
     std::vector<WorkerForSimilarity> worker_memory(1);
     #endif
 
+    /* Global variable that determines if the procedure receives a stop signal */
+    SignalSwitcher ss = SignalSwitcher();
+    check_interrupt_switch(ss);
+    #if defined(DONT_THROW_ON_INTERRUPT)
+    if (interrupt_switch) return;
+    #endif
+
     if (model_outputs != NULL)
     {
         #pragma omp parallel for schedule(dynamic) num_threads(nthreads) shared(ntrees, worker_memory, prediction_data, model_outputs)
@@ -185,6 +192,11 @@ void calc_similarity(double numeric_data[], int categ_data[],
                                 (size_t)0);
         }    
     }
+
+    check_interrupt_switch(ss);
+    #if defined(DONT_THROW_ON_INTERRUPT)
+    if (interrupt_switch) return;
+    #endif
     
     /* gather and transform the results */
     gather_sim_result(&worker_memory, NULL,
@@ -193,6 +205,11 @@ void calc_similarity(double numeric_data[], int categ_data[],
                       tmat, rmat, n_from,
                       ntrees, assume_full_distr,
                       standardize_dist, nthreads);
+
+    check_interrupt_switch(ss);
+    #if defined(DONT_THROW_ON_INTERRUPT)
+    if (interrupt_switch) return;
+    #endif
 }
 
 void traverse_tree_sim(WorkerForSimilarity   &workspace,
@@ -201,6 +218,9 @@ void traverse_tree_sim(WorkerForSimilarity   &workspace,
                        std::vector<IsoTree>  &trees,
                        size_t                curr_tree)
 {
+    if (interrupt_switch)
+        return;
+
     if (workspace.st == workspace.end)
         return;
 
@@ -433,6 +453,9 @@ void traverse_hplane_sim(WorkerForSimilarity     &workspace,
                          std::vector<IsoHPlane>  &hplanes,
                          size_t                  curr_tree)
 {
+    if (interrupt_switch)
+        return;
+    
     if (workspace.st == workspace.end)
         return;
 
@@ -592,6 +615,9 @@ void gather_sim_result(std::vector<WorkerForSimilarity> *worker_memory,
                        size_t ntrees, bool assume_full_distr,
                        bool standardize_dist, int nthreads)
 {
+    if (interrupt_switch)
+        return;
+    
     size_t ncomb = (prediction_data != NULL)?
                     (prediction_data->nrows * (prediction_data->nrows - 1)) / 2
                         :
