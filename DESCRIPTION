@@ -1,8 +1,8 @@
 Package: isotree
 Type: Package
 Title: Isolation-Based Outlier Detection
-Version: 0.1.28
-Date: 2021-01-13
+Version: 0.2.7
+Date: 2021-02-28
 Author: David Cortes
 Maintainer: David Cortes <david.cortes.rivera@gmail.com>
 URL: https://github.com/david-cortes/isotree
@@ -25,6 +25,6 @@ Enhances: Matrix, SparseM
 LinkingTo: Rcpp, Rcereal
 RoxygenNote: 7.1.1
 NeedsCompilation: yes
-Packaged: 2021-01-13 19:46:43 UTC; david
+Packaged: 2021-03-01 18:54:16 UTC; david
 Repository: CRAN
-Date/Publication: 2021-01-13 20:20:02 UTC
+Date/Publication: 2021-03-01 19:20:02 UTC

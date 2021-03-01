@@ -22,7 +22,7 @@
 *     [9] Cortes, David. "Imputing missing values with unsupervised random trees." arXiv preprint arXiv:1911.06646 (2019).
 * 
 *     BSD 2-Clause License
-*     Copyright (c) 2020, David Cortes
+*     Copyright (c) 2019-2021, David Cortes
 *     All rights reserved.
 *     Redistribution and use in source and binary forms, with or without
 *     modification, are permitted provided that the following conditions are met:
@@ -44,53 +44,15 @@
 */
 #include "isotree.h"
 
-void decide_column(size_t ncols_numeric, size_t ncols_categ, size_t &col_chosen, ColType &col_type,
-                   RNG_engine &rnd_generator, std::uniform_int_distribution<size_t> &runif,
-                   std::discrete_distribution<size_t> &col_sampler)
-{
-    if (!col_sampler.max())
-        col_chosen = runif(rnd_generator);
-    else
-        col_chosen = col_sampler(rnd_generator);
-
-    if (col_chosen >= ncols_numeric)
-    {
-        col_chosen -= ncols_numeric;
-        col_type    = Categorical;
-    }
-
-    else { col_type = Numeric; }
-}
-
-void add_unsplittable_col(WorkerMemory &workspace, IsoTree &tree, InputData &input_data)
-{
-    if (tree.col_type == Numeric)
-        workspace.cols_possible[tree.col_num] = false;
-    else
-        workspace.cols_possible[tree.col_num + input_data.ncols_numeric] = false;
-}
-
-void add_unsplittable_col(WorkerMemory &workspace, InputData &input_data)
-{
-    if (workspace.col_type == Numeric)
-        workspace.cols_possible[workspace.col_chosen] = false;
-    else
-        workspace.cols_possible[workspace.col_chosen + input_data.ncols_numeric] = false;
-}
-
-bool check_is_not_unsplittable_col(WorkerMemory &workspace, IsoTree &tree, InputData &input_data)
-{
-    if (tree.col_type == Numeric)
-        return workspace.cols_possible[tree.col_num];
-    else
-        return workspace.cols_possible[tree.col_num + input_data.ncols_numeric];
-}
 
 /* for use in regular model */
+template <class InputData, class WorkerMemory>
 void get_split_range(WorkerMemory &workspace, InputData &input_data, ModelParams &model_params, IsoTree &tree)
 {
-    if (tree.col_type == Numeric)
+    if (tree.col_num < input_data.ncols_numeric)
     {
+        tree.col_type = Numeric;
+
         if (input_data.Xc_indptr == NULL)
             get_range(workspace.ix_arr.data(), input_data.numeric_data + input_data.nrows * tree.col_num,
                       workspace.st, workspace.end, model_params.missing_action,
@@ -103,6 +65,9 @@ void get_split_range(WorkerMemory &workspace, InputData &input_data, ModelParams
 
     else
     {
+        tree.col_num -= input_data.ncols_numeric;
+        tree.col_type = Categorical;
+
         get_categs(workspace.ix_arr.data(), input_data.categ_data + input_data.nrows * tree.col_num,
                    workspace.st, workspace.end, input_data.ncat[tree.col_num],
                    model_params.missing_action, workspace.categs.data(), workspace.npresent, workspace.unsplittable);
@@ -110,10 +75,13 @@ void get_split_range(WorkerMemory &workspace, InputData &input_data, ModelParams
 }
 
 /* for use in extended model */
+template <class InputData, class WorkerMemory>
 void get_split_range(WorkerMemory &workspace, InputData &input_data, ModelParams &model_params)
 {
-    if (workspace.col_type == Numeric)
+    if (workspace.col_chosen < input_data.ncols_numeric)
     {
+        workspace.col_type = Numeric;
+
         if (input_data.Xc_indptr == NULL)
             get_range(workspace.ix_arr.data(), input_data.numeric_data + input_data.nrows * workspace.col_chosen,
                       workspace.st, workspace.end, model_params.missing_action,
@@ -126,12 +94,16 @@ void get_split_range(WorkerMemory &workspace, InputData &input_data, ModelParams
 
     else
     {
+        workspace.col_type = Categorical;
+        workspace.col_chosen -= input_data.ncols_numeric;
+
         get_categs(workspace.ix_arr.data(), input_data.categ_data + input_data.nrows * workspace.col_chosen,
                    workspace.st, workspace.end, input_data.ncat[workspace.col_chosen],
                    model_params.missing_action, workspace.categs.data(), workspace.npresent, workspace.unsplittable);
     }
 }
 
+template <class InputData, class WorkerMemory>
 int choose_cat_from_present(WorkerMemory &workspace, InputData &input_data, size_t col_num)
 {
     int chosen_cat = std::uniform_int_distribution<int>
@@ -152,41 +124,27 @@ int choose_cat_from_present(WorkerMemory &workspace, InputData &input_data, size
     return -1; /* this will never be reached, but CRAN complains otherwise */
 }
 
-void update_col_sampler(WorkerMemory &workspace, InputData &input_data)
-{
-    if (!workspace.col_sampler.max())
-        return;
-
-    std::vector<double> col_weights = workspace.col_sampler.probabilities();
-    for (size_t col = 0; col < input_data.ncols_numeric; col++)
-        if (!workspace.cols_possible[col])
-            col_weights[col] = 0;
-    for (size_t col = 0; col < input_data.ncols_categ; col++)
-        if (!workspace.cols_possible[col + input_data.ncols_numeric])
-            col_weights[col + input_data.ncols_numeric] = 0;
-    workspace.col_sampler = std::discrete_distribution<size_t>(col_weights.begin(), col_weights.end());
-}
-
 bool is_col_taken(std::vector<bool> &col_is_taken, std::unordered_set<size_t> &col_is_taken_s,
-                  InputData &input_data, size_t col_num, ColType col_type)
+                  size_t col_num)
 {
-    col_num += ((col_type == Categorical)? 0 : input_data.ncols_categ);
     if (col_is_taken.size())
         return col_is_taken[col_num];
     else
         return col_is_taken_s.find(col_num) != col_is_taken_s.end();
 }
 
+template <class InputData>
 void set_col_as_taken(std::vector<bool> &col_is_taken, std::unordered_set<size_t> &col_is_taken_s,
                       InputData &input_data, size_t col_num, ColType col_type)
 {
-    col_num += ((col_type == Categorical)? 0 : input_data.ncols_categ);
+    col_num += ((col_type == Numeric)? 0 : input_data.ncols_numeric);
     if (col_is_taken.size())
         col_is_taken[col_num] = true;
     else
         col_is_taken_s.insert(col_num);
 }
 
+template <class InputData, class WorkerMemory>
 void add_separation_step(WorkerMemory &workspace, InputData &input_data, double remainder)
 {
     if (workspace.weights_arr.size())
@@ -200,6 +158,7 @@ void add_separation_step(WorkerMemory &workspace, InputData &input_data, double 
                               input_data.nrows, workspace.tmat_sep.data(), remainder);
 }
 
+template <class InputData, class WorkerMemory>
 void add_remainder_separation_steps(WorkerMemory &workspace, InputData &input_data, long double sum_weight)
 {
     if (
@@ -217,6 +176,7 @@ void add_remainder_separation_steps(WorkerMemory &workspace, InputData &input_da
     }
 }
 
+template <class PredictionData, class sparse_ix>
 void remap_terminal_trees(IsoForest *model_outputs, ExtIsoForest *model_outputs_ext,
                           PredictionData &prediction_data, sparse_ix *restrict tree_num, int nthreads)
 {
@@ -268,57 +228,76 @@ void remap_terminal_trees(IsoForest *model_outputs, ExtIsoForest *model_outputs_
     }
 }
 
-void backup_recursion_state(WorkerMemory &workspace, RecursionState &recursion_state)
+
+template <class WorkerMemory>
+RecursionState::RecursionState(WorkerMemory &workspace, bool full_state)
 {
-    recursion_state.st            = workspace.st;
-    recursion_state.st_NA         = workspace.st_NA;
-    recursion_state.end_NA        = workspace.end_NA;
-    recursion_state.split_ix      = workspace.split_ix;
-    recursion_state.end           = workspace.end;
-    recursion_state.cols_possible = workspace.cols_possible;
-    recursion_state.col_sampler   = workspace.col_sampler;
+    this->full_state = full_state;
 
-    /* for the extended model, it's not necessary to copy everything */
-    if (!workspace.comb_val.size())
+    this->split_ix         =  workspace.split_ix;
+    this->end              =  workspace.end;
+    if (!workspace.col_sampler.has_weights())
+        this->sampler_pos  =  workspace.col_sampler.curr_pos;
+    else {
+        this->col_sampler_weights = workspace.col_sampler.tree_weights;
+        this->n_dropped           = workspace.col_sampler.n_dropped;
+    }
+
+    if (this->full_state)
     {
-        recursion_state.ix_arr = std::vector<size_t>(workspace.ix_arr.begin() + workspace.st_NA,
-                                                     workspace.ix_arr.begin() + workspace.end + 1);
-        size_t tot = workspace.end - workspace.st_NA + 1;
-        if (workspace.weights_arr.size() || workspace.weights_map.size())
-            recursion_state.weights_arr = std::unique_ptr<double[]>(new double[tot]);
-        if (workspace.weights_arr.size())
-            for (size_t ix = 0; ix < tot; ix++)
-                recursion_state.weights_arr[ix] = workspace.weights_arr[workspace.ix_arr[ix + workspace.st_NA]];
-        else if (workspace.weights_map.size())
-            for (size_t ix = 0; ix < tot; ix++)
-                recursion_state.weights_arr[ix] = workspace.weights_map[workspace.ix_arr[ix + workspace.st_NA]];
-        
+        this->st           = workspace.st;
+        this->st_NA        = workspace.st_NA;
+        this->end_NA       = workspace.end_NA;
 
+        /* for the extended model, it's not necessary to copy everything */
+        if (!workspace.comb_val.size())
+        {
+            this->ix_arr = std::vector<size_t>(workspace.ix_arr.begin() + workspace.st_NA,
+                                                         workspace.ix_arr.begin() + workspace.end + 1);
+            size_t tot = workspace.end - workspace.st_NA + 1;
+            if (workspace.weights_arr.size() || workspace.weights_map.size())
+                this->weights_arr = std::unique_ptr<double[]>(new double[tot]);
+            if (workspace.weights_arr.size())
+                for (size_t ix = 0; ix < tot; ix++)
+                    this->weights_arr[ix] = workspace.weights_arr[workspace.ix_arr[ix + workspace.st_NA]];
+            else if (workspace.weights_map.size())
+                for (size_t ix = 0; ix < tot; ix++)
+                    this->weights_arr[ix] = workspace.weights_map[workspace.ix_arr[ix + workspace.st_NA]];
+        }
     }
 }
 
 
-void restore_recursion_state(WorkerMemory &workspace, RecursionState &recursion_state)
+template <class WorkerMemory>
+void RecursionState::restore_state(WorkerMemory &workspace)
 {
-    workspace.st            = recursion_state.st;
-    workspace.st_NA         = recursion_state.st_NA;
-    workspace.end_NA        = recursion_state.end_NA;
-    workspace.split_ix      = recursion_state.split_ix;
-    workspace.end           = recursion_state.end;
-    workspace.cols_possible = std::move(recursion_state.cols_possible);
-    workspace.col_sampler   = std::move(recursion_state.col_sampler);
+    workspace.split_ix         =  this->split_ix;
+    workspace.end              =  this->end;
+    if (!workspace.col_sampler.has_weights())
+        workspace.col_sampler.curr_pos = this->sampler_pos;
+    else  {
+        workspace.col_sampler.tree_weights  =  std::move(this->col_sampler_weights);
+        workspace.col_sampler.n_dropped     =  this->n_dropped;
+    }
 
-    if (!workspace.comb_val.size())
+    if (this->full_state)
     {
-        std::copy(recursion_state.ix_arr.begin(),
-                  recursion_state.ix_arr.end(),
-                  workspace.ix_arr.begin() + recursion_state.st_NA);
-        size_t tot = workspace.end - workspace.st_NA + 1;
-        if (workspace.weights_arr.size())
-            for (size_t ix = 0; ix < tot; ix++)
-                workspace.weights_arr[workspace.ix_arr[ix + workspace.st_NA]] = recursion_state.weights_arr[ix];
-        else if (workspace.weights_map.size())
-            for (size_t ix = 0; ix < tot; ix++)
-                workspace.weights_map[workspace.ix_arr[ix + workspace.st_NA]] = recursion_state.weights_arr[ix];
+        workspace.st         =  this->st;
+        workspace.st_NA      =  this->st_NA;
+        workspace.end_NA     =  this->end_NA;
+
+        if (!workspace.comb_val.size())
+        {
+            std::copy(this->ix_arr.begin(),
+                      this->ix_arr.end(),
+                      workspace.ix_arr.begin() + this->st_NA);
+            size_t tot = workspace.end - workspace.st_NA + 1;
+            if (workspace.weights_arr.size())
+                for (size_t ix = 0; ix < tot; ix++)
+                    workspace.weights_arr[workspace.ix_arr[ix + workspace.st_NA]] = this->weights_arr[ix];
+            else if (workspace.weights_map.size())
+                for (size_t ix = 0; ix < tot; ix++)
+                    workspace.weights_map[workspace.ix_arr[ix + workspace.st_NA]] = this->weights_arr[ix];
+        }
     }
 }

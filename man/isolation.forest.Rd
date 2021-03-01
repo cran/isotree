@@ -6,13 +6,13 @@
 \usage{
 isolation.forest(
   df,
-  sample_weights = NULL,
-  column_weights = NULL,
   sample_size = NROW(df),
   ntrees = 500,
   ndim = min(3, NCOL(df)),
   ntry = 3,
+  categ_cols = NULL,
   max_depth = ceiling(log2(sample_size)),
+  ncols_per_tree = NCOL(df),
   prob_pick_avg_gain = 0,
   prob_pick_pooled_gain = 0,
   prob_split_avg_gain = 0,
@@ -26,7 +26,7 @@ isolation.forest(
   recode_categ = TRUE,
   weights_as_sample_prob = TRUE,
   sample_with_replacement = FALSE,
-  penalize_range = TRUE,
+  penalize_range = FALSE,
   weigh_by_kurtosis = FALSE,
   coefs = "normal",
   assume_full_distr = TRUE,
@@ -38,6 +38,8 @@ isolation.forest(
   output_score = FALSE,
   output_dist = FALSE,
   square_dist = FALSE,
+  sample_weights = NULL,
+  column_weights = NULL,
   random_seed = 1,
   nthreads = parallel::detectCores()
 )
@@ -55,40 +57,52 @@ If passing a `data.frame`, will assume that columns are:
   \item Numerical, if they are of types `numeric`, `integer`, `Date`, `POSIXct`.
   \item Categorical, if they are of type `character`, `factor`, `bool`.
 }
-Other column types are not supported. Note that it does not support inputs with a number of rows or number of columns
-above that of `.Machine$integer.max` (typically 2^31-1).}
-
-\item{sample_weights}{Sample observation weights for each row of `df`, with higher weights indicating either higher sampling
-probability (i.e. the observation has a larger effect on the fitted model, if using sub-samples), or
-distribution density (i.e. if the weight is two, it has the same effect of including the same data
-point twice), according to parameter `weights_as_sample_prob`. Not supported when calculating pairwise
-distances while the model is being fit (done by passing `output_dist` = `TRUE`).}
-
-\item{column_weights}{Sampling weights for each column in `df`. Ignored when picking columns by deterministic criterion.
-If passing `NULL`, each column will have a uniform weight. Cannot be used when weighting by kurtosis.
-Note that, if passing a data.frame with both numeric and categorical columns, the column names must
-not be repeated, otherwise the column weights passed here will not end up matching. If passing a `data.frame`
-to `df`, will assume the column order is the same as in there, regardless of whether the entries passed to
-`column_weights` are named or not.}
+Other input and column types are not supported.}
 
 \item{sample_size}{Sample size of the data sub-samples with which each binary tree will be built.
 Recommended value in references [1], [2], [3], [4] is 256, while the default value in the author's code in reference [5] is
-`NROW(df)` (same as in here).}
+`NROW(df)` (same as in here).
+
+If passing a number between zero and one, will assume it means taking a sample size that represents
+that proportion of the rows in the data.
+
+Hint: seeing a distribution of scores which is on average too far below 0.5 could mean that the
+model needs more trees and/or bigger samples to reach convergence (unless using non-random
+splits, in which case the distribution is likely to be centered around a much lower number),
+or that the distributions in the data are too skewed for random uniform splits.}
 
 \item{ntrees}{Number of binary trees to build for the model. Recommended value in reference [1] is 100, while the
 default value in the author's code in reference [5] is 10. In general, the number of trees required for good results
 is higher when (a) there are many columns, (b) there are categorical variables, (c) categorical variables have many
-categories, (d) `ndim` is high.}
+categories, (d) `ndim` is high.
+
+Hint: seeing a distribution of scores which is on average too far below 0.5 could mean that the
+model needs more trees and/or bigger samples to reach convergence (unless using non-random
+splits, in which case the distribution is likely to be centered around a much lower number),
+or that the distributions in the data are too skewed for random uniform splits.}
 
 \item{ndim}{Number of columns to combine to produce a split. If passing 1, will produce the single-variable model described
 in references [1] and [2], while if passing values greater than 1, will produce the extended model described in
 references [3] and [4].
 Recommended value in reference [4] is 2, while [3] recommends a low value such as 2 or 3. Models with values higher than 1
-are referred hereafter as the extended model (as in [3]).}
+are referred hereafter as the extended model (as in [3]).
+
+Note that, when using `ndim>1`, the variables are standardized at each step as suggested in [4],
+which makes the models slightly different than in [3].}
 
 \item{ntry}{In the extended model with non-random splits, how many random combinations to try for determining the best gain.
 Only used when deciding splits by gain (see documentation for parameters `prob_pick_avg_gain` and `prob_pick_pooled_gain`).
-Recommended value in refernece [4] is 10. Ignored for single-variable model.}
+Recommended value in reference [4] is 10. Ignored for single-variable model.}
+
+\item{categ_cols}{Columns that hold categorical features (should be an integer vector),
+when the data is passed as a matrix.
+Categorical columns should contain only integer values with a continuous numeration starting at zero,
+with negative values and NaN taken as missing,
+and the vector passed here should correspond to the column numbers, with numeration starting
+at one.
+
+This is ignored when the input is passed as a `data.frame` as then it will consider columns as
+categorical depending on their type/class (see the documentation for `df` for details).}
 
 \item{max_depth}{Maximum depth of the binary trees to grow. By default, will limit it to the corresponding
 depth of a balanced binary tree with number of terminal nodes corresponding to the sub-sample size (the reason
@@ -98,6 +112,13 @@ the remaining isolation depth for them is estimated assuming the data and splits
 (separation depth follows a similar process with expected value calculated as in reference [6]). Default setting
 for references [1], [2], [3], [4] is the same as the default here, but it's recommended to pass higher values if
 using the model for purposes other than outlier detection.}
+
+\item{ncols_per_tree}{Number of columns to use (have as potential candidates for splitting at each iteration) in each tree,
+somewhat similar to the 'mtry' parameter of random forests.
+In general, this is only relevant when using non-random splits and/or weighting by kurtosis.
+
+If passing a number between zero and one, will assume it means taking a sample size that represents
+that proportion of the columns in the data.}
 
 \item{prob_pick_avg_gain}{\itemize{
 \item For the single-variable model (`ndim=1`), this parameter indicates the probability
@@ -117,8 +138,15 @@ Note that, since this will created isolated nodes faster, the resulting object w
 When splits are not made according to any of `prob_pick_avg_gain`, `prob_pick_pooled_gain`, `prob_split_avg_gain`,
 `prob_split_pooled_gain`, both the column and the split point are decided at random. Default setting for 
 references [1], [2], [3] is zero, and default for reference [4] is 1. This is the randomization parameter
-that can be passed to the author's original code in [5]. Note that, if passing a value of 1 (100\%) with no sub-sampling and using the
-single-variable model, every single tree will have the exact same splits.}
+that can be passed to the author's original code in [5],
+but note that the code in [5] suffers from a mathematical error in the calculation of running standard deviations,
+so the results from it might not match with this library's.
+
+Note that, if passing a value of 1 (100\%) with no sub-sampling and using the
+single-variable model, every single tree will have the exact same splits.
+
+Important detail: if using either `prob_pick_avg_gain` or `prob_pick_pooled_gain`, the distribution of
+outlier scores is unlikely to be centered around 0.5.}
 
 \item{prob_pick_pooled_gain}{\itemize{
 \item For the single-variable model (`ndim=1`), this parameter indicates the probability
@@ -138,11 +166,17 @@ When used for outlier detection, higher values of this parameter result in model
 outliers in the training data, but generalize poorly to outliers in new data and to values of variables
 outside of the ranges from the training data. Passing small `sample_size` and high values of this parameter will
 tend to flag too many outliers.
+
 Note that, since this makes the trees more even and thus it takes more steps to produce isolated nodes,
 the resulting object will be heavier (use more memory). When splits are not made according to any of `prob_pick_avg_gain`,
 `prob_pick_pooled_gain`, `prob_split_avg_gain`, `prob_split_pooled_gain`, both the column and the split point
 are decided at random. Note that, if passing value = 1 (100\%) with no sub-sampling and using the single-variable model,
-every single tree will have the exact same splits.}
+every single tree will have the exact same splits.
+
+Be aware that `penalize_range` can also have a large impact when using `prob_pick_pooled_gain`.
+
+Important detail: if using either `prob_pick_avg_gain` or `prob_pick_pooled_gain`, the distribution of
+outlier scores is unlikely to be centered around 0.5.}
 
 \item{prob_split_avg_gain}{Probability of making each split by selecting a column at random and determining the split point as
 that which gives the highest averaged gain. Not supported for the extended model as the splits are on
@@ -165,8 +199,8 @@ splits at a node is below this  threshold, that node becomes a terminal node.}
   model (recommended for it).
   \item `"fail"`, which will assume there are no missing values and will trigger undefined behavior if it encounters any.
 }
-In the extended model, infinite values will be treated as missing. Note that passing `"fail"` might
-crash the R process if there turn out to be missing values, but will otherwise produce faster fitting and prediction
+In the extended model, infinite values will be treated as missing.
+Passing `"fail"` will produce faster fitting and prediction
 times along with decreased model object sizes. Models from references [1], [2], [3], [4] correspond to `"fail"` here.}
 
 \item{new_categ_action}{What to do after splitting a categorical feature when new data that reaches that split has categories that
@@ -218,17 +252,31 @@ is only used when sub-sampling data for each tree, which is not the default in t
 \item{sample_with_replacement}{Whether to sample rows with replacement or not (not recommended).
 Note that distance calculations, if desired, don't work when there are duplicate rows.}
 
-\item{penalize_range}{Whether to penalize (add +1 to the terminal depth) observations at prediction time that have a value
+\item{penalize_range}{Whether to penalize (add -1 to the terminal depth) observations at prediction time that have a value
 of the chosen split variable (linear combination in extended model) that falls outside of a pre-determined
 reasonable range in the data being split (given by `2 * range` in data and centered around the split point),
 as proposed in reference [4] and implemented in the authors' original code in reference [5]. Not used in single-variable model
-when splitting by categorical variables.}
+when splitting by categorical variables.
+
+It's recommended to turn this off for faster predictions on sparse CSC matrices.
+
+Note that this can make a very large difference in the results when using `prob_pick_pooled_gain`.
+
+Be aware that this option can make the distribution of outlier scores a bit different
+(i.e. not centered around 0.5)}
 
 \item{weigh_by_kurtosis}{Whether to weigh each column according to the kurtosis obtained in the sub-sample that is selected
 for each tree as briefly proposed in reference [1]. Note that this is only done at the beginning of each tree
 sample, so if not using sub-samples, it's better to pass column weights calculated externally. For
 categorical columns, will calculate expected kurtosis if the column was converted to numerical by
-assigning to each category a random number `~ Unif(0, 1)`.}
+assigning to each category a random number `~ Unif(0, 1)`.
+
+Note that when using sparse matrices, the calculation of kurtosis will rely on a procedure that
+uses sums of squares and higher-power numbers, which has less numerical precision than the
+calculation used for dense inputs, and as such, the results might differ slightly.
+
+Using this option makes the model more likely to pick the columns that have anomalous values
+when viewed as a 1-d distribution, and can bring a large improvement in some datasets.}
 
 \item{coefs}{For the extended model, whether to sample random coefficients according to a normal distribution `~ N(0, 1)`
 (as proposed in reference [3]) or according to a uniform distribution `~ Unif(-1, +1)` as proposed in reference [4].
@@ -284,16 +332,35 @@ results from this might differ a bit from those of `predict` called after.}
 just the upper-triangular part, in which the entry for pair (i,j) with 1 <= i < j <= n is located at position
 p(i, j) = ((i - 1) * (n - i/2) + j - i).}
 
-\item{random_seed}{Seed that will be used to generate random numbers used by the model.}
+\item{sample_weights}{Sample observation weights for each row of `df`, with higher weights indicating either higher sampling
+probability (i.e. the observation has a larger effect on the fitted model, if using sub-samples), or
+distribution density (i.e. if the weight is two, it has the same effect of including the same data
+point twice), according to parameter `weights_as_sample_prob`. Not supported when calculating pairwise
+distances while the model is being fit (done by passing `output_dist` = `TRUE`).}
+
+\item{column_weights}{Sampling weights for each column in `df`. Ignored when picking columns by deterministic criterion.
+If passing `NULL`, each column will have a uniform weight. Cannot be used when weighting by kurtosis.
+Note that, if passing a data.frame with both numeric and categorical columns, the column names must
+not be repeated, otherwise the column weights passed here will not end up matching. If passing a `data.frame`
+to `df`, will assume the column order is the same as in there, regardless of whether the entries passed to
+`column_weights` are named or not.}
+
+\item{random_seed}{Seed that will be used for random number generation.}
 
 \item{nthreads}{Number of parallel threads to use. If passing a negative number, will use
 the maximum number of available threads in the system. Note that, the more threads,
-the more memory will be allocated, even if the thread does not end up being used.}
+the more memory will be allocated, even if the thread does not end up being used.
+Be aware that most of the operations are bound by memory bandwidth, which means that
+adding more threads will not result in a linear speed-up. For some types of data
+(e.g. large sparse matrices with small sample sizes), adding more threads might result
+in only a very modest speed up (e.g. 1.5x faster with 4x more threads),
+even if all threads look fully utilized.}
 }
 \value{
 If passing `output_score` = `FALSE`, `output_dist` = `FALSE`, and `output_imputations` = `FALSE` (the defaults),
-will output an `isolation_forest` object from which `predict` method can then be called on new data. If passing
-`TRUE` to any of the former options, will output a list with entries:
+will output an `isolation_forest` object from which `predict` method can then be called on new data.
+
+If passing `TRUE` to any of the former options, will output a list with entries:
 \itemize{
   \item `model`: the `isolation_forest` object from which new predictions can be made.
   \item `scores`: a vector with the outlier score for each inpuit observation (if passing `output_score` = `TRUE`).
@@ -315,29 +382,38 @@ This version adds heuristics to handle missing data and categorical variables. C
 distances by checking the depth after which two observations become separated, and to approximate densities by fitting
 trees beyond balanced-tree limit. Offers options to vary between randomized and deterministic splits too.
 
-Note that the default parameters set up for this implementation will not scale to large datasets. In particular,
-if the amount of data is large, it's avised to want to set a smaller sample size for each tree, and fit fewer of them. As well, the default option for `missing_action` might slow things down significantly.
+Important: The default parameters in this software do not correspond to the suggested parameters in
+any of the references.
+In particular, the following default values are likely to cause huge differences when compared to the
+defaults in other software: `ndim`, `sample_size`, `ntrees`. The defaults here are
+nevertheless more likely to result in better models. In order to mimic scikit-learn for example, one
+would need to pass `ndim=1`, `sample_size=256`, `ntrees=100`, `missing_action="fail"`, `nthreads=1`.
 
-The model offers many tunable parameters. The most likely candidate to tune is `prob_pick_pooled_gain`, for
-which higher values tend to result in a better ability to flag outliers in the training data (`df`)
-at the expense of hindered performance when making predictions on new data (calling function `predict`) and poorer
+Note that the default parameters will not scale to large datasets. In particular,
+if the amount of data is large, it's suggested to set a smaller sample size for each tree (parameter `sample_size`),
+and to fit fewer of them (parameter `ntrees`).
+As well, the default option for `missing_action` might slow things down significantly
+(see below for details).
+These defaults can also result in very big model sizes in memory and as serialized
+files (e.g. models that weight over 10GB) when the number of rows in the data is large.
+Using fewer trees, smaller sample sizes, and shallower trees can help to reduce model
+sizes if that becomes a problem.
+
+The model offers many tunable parameters. The most likely candidate to tune is
+`prob_pick_pooled_gain`, for which higher values tend to
+result in a better ability to flag outliers in the training data (`df`) at the expense of hindered
+performance when making predictions on new data (calling function `predict`) and poorer
 generalizability to inputs with values outside the variables' ranges to which the model was fit
 (see plots generated from the examples for a better idea of the difference). The next candidate to tune is
-`prob_pick_avg_gain` (along with `sample_size`), for which high values tend to result in models that are more likely
-to flag values outside of the variables' ranges and fewer ghost regions, at the expense of fewer flagged outliers
-in the original data.
+`sample_size` - the default is to use all rows, but in some datasets introducing sub-sampling can help,
+especially for the single-variable model. In smaller datasets, one might also want to experiment
+with `weigh_by_kurtosis` and perhaps lower `ndim`.
 }
 \details{
-When calculating gain, the variables are standardized at each step, so there is no need to center/scale the
-data beforehand.
-
-When using sparse matrices, calculations such as standard deviations, gain, and kurtosis, will use procedures
-that rely on calculating sums of squared numbers. This is not a problem if most of the entries are zero and the
-numbers are small, but if passing dense matrices as sparse and/or the entries in the sparse matrices have values
-in wildly different orders of magnitude (e.g. 0.0001 and 10000000), the calculations might be incorrect due to loss of
-numeric precision, and the results might not be as good. For dense matrices it uses more numerically-robust
-techniques (which would add a large computational overhead in sparse matrices), so it's not a problem to have values
-with different orders of magnitude.
+When using more than one dimension for splits (i.e. splitting hyperplanes, see `ndim`) and when
+calculating gain, the variables are standardized at each step, so there is no need to center/scale the
+data beforehand. The gain calculations are also standardized according to the standard deviation when
+using `ntry>1` or `ndim==1`, in order to avoid differences in the magnitudes of the coefficients.
 }
 \examples{
 ### Example 1: detect an obvious outlier
@@ -378,7 +454,8 @@ group2 <- data.frame(x = rnorm(1000, +1, .2),
 X = rbind(group1, group2)
 
 ### Add an obvious outlier which is within the 1d ranges
-### (As an interesting test, remove and see what happens)
+### (As an interesting test, remove and see what happens,
+###  or check how its score changes when using sub-sampling)
 X = rbind(X, c(-1, 1))
 
 ### Produce heatmaps
@@ -404,6 +481,7 @@ iso_simple = isolation.forest(
     X, ndim=1,
     ntrees=100,
     nthreads=1,
+    penalize_range=FALSE,
     prob_pick_pooled_gain=0,
     prob_pick_avg_gain=0)
 Z1 <- predict(iso_simple, space_d)
@@ -414,6 +492,7 @@ iso_ext = isolation.forest(
      X, ndim=2,
      ntrees=100,
      nthreads=1,
+     penalize_range=FALSE,
      prob_pick_pooled_gain=0,
      prob_pick_avg_gain=0)
 Z2 <- predict(iso_ext, space_d)
@@ -424,6 +503,7 @@ iso_sci = isolation.forest(
      X, ndim=2,
      ntrees=100,
      nthreads=1,
+     penalize_range=TRUE,
      prob_pick_pooled_gain=0,
      prob_pick_avg_gain=1)
 Z3 <- predict(iso_sci, space_d)
@@ -434,6 +514,7 @@ iso_fcf = isolation.forest(
      X, ndim=2,
      ntrees=100,
      nthreads=1,
+     penalize_range=FALSE,
      prob_pick_pooled_gain=1,
      prob_pick_avg_gain=0)
 Z4 <- predict(iso_fcf, space_d)
@@ -537,6 +618,7 @@ if (require("outliertree")) {
 \item Quinlan, J. Ross. "C4. 5: programs for machine learning." Elsevier, 2014.
 \item Cortes, David. "Distance approximation using Isolation Forests." arXiv preprint arXiv:1910.12362 (2019).
 \item Cortes, David. "Imputing missing values with unsupervised random trees." arXiv preprint arXiv:1911.06646 (2019).
+\item \url{https://math.stackexchange.com/questions/3333220/expected-average-depth-in-random-binary-tree-constructed-top-to-bottom}
 }
 }
 \seealso{

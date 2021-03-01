@@ -1,6 +1,7 @@
 #' @importFrom parallel detectCores
 #' @importFrom stats predict
 #' @importFrom utils head
+#' @useDynLib isotree, .registration=TRUE
 
 #' @title Create Isolation Forest Model
 #' @description Isolation Forest is an algorithm originally developed for outlier detection that consists in splitting
@@ -15,17 +16,37 @@
 #' distances by checking the depth after which two observations become separated, and to approximate densities by fitting
 #' trees beyond balanced-tree limit. Offers options to vary between randomized and deterministic splits too.
 #' 
-#' Note that the default parameters set up for this implementation will not scale to large datasets. In particular,
-#' if the amount of data is large, it's avised to want to set a smaller sample size for each tree, and fit fewer of them. As well, the default option for `missing_action` might slow things down significantly.
+#' Important: The default parameters in this software do not correspond to the suggested parameters in
+#' any of the references.
+#' In particular, the following default values are likely to cause huge differences when compared to the
+#' defaults in other software: `ndim`, `sample_size`, `ntrees`. The defaults here are
+#' nevertheless more likely to result in better models. In order to mimic scikit-learn for example, one
+#' would need to pass `ndim=1`, `sample_size=256`, `ntrees=100`, `missing_action="fail"`, `nthreads=1`.
 #' 
-#' The model offers many tunable parameters. The most likely candidate to tune is `prob_pick_pooled_gain`, for
-#' which higher values tend to result in a better ability to flag outliers in the training data (`df`)
-#' at the expense of hindered performance when making predictions on new data (calling function `predict`) and poorer
+#' Note that the default parameters will not scale to large datasets. In particular,
+#' if the amount of data is large, it's suggested to set a smaller sample size for each tree (parameter `sample_size`),
+#' and to fit fewer of them (parameter `ntrees`).
+#' As well, the default option for `missing_action` might slow things down significantly
+#' (see below for details).
+#' These defaults can also result in very big model sizes in memory and as serialized
+#' files (e.g. models that weight over 10GB) when the number of rows in the data is large.
+#' Using fewer trees, smaller sample sizes, and shallower trees can help to reduce model
+#' sizes if that becomes a problem.
+#' 
+#' The model offers many tunable parameters. The most likely candidate to tune is
+#' `prob_pick_pooled_gain`, for which higher values tend to
+#' result in a better ability to flag outliers in the training data (`df`) at the expense of hindered
+#' performance when making predictions on new data (calling function `predict`) and poorer
 #' generalizability to inputs with values outside the variables' ranges to which the model was fit
 #' (see plots generated from the examples for a better idea of the difference). The next candidate to tune is
-#' `prob_pick_avg_gain` (along with `sample_size`), for which high values tend to result in models that are more likely
-#' to flag values outside of the variables' ranges and fewer ghost regions, at the expense of fewer flagged outliers
-#' in the original data.
+#' `sample_size` - the default is to use all rows, but in some datasets introducing sub-sampling can help,
+#' especially for the single-variable model. In smaller datasets, one might also want to experiment
+#' with `weigh_by_kurtosis` and perhaps lower `ndim`.
+#' 
+#' @details When using more than one dimension for splits (i.e. splitting hyperplanes, see `ndim`) and when
+#' calculating gain, the variables are standardized at each step, so there is no need to center/scale the
+#' data beforehand. The gain calculations are also standardized according to the standard deviation when
+#' using `ntry>1` or `ndim==1`, in order to avoid differences in the magnitudes of the coefficients.
 #' 
 #' @param df Data to which to fit the model. Supported inputs type are:\itemize{
 #' \item A `data.frame`, also accepted as `data.table` or `tibble`.
@@ -39,34 +60,47 @@
 #'   \item Numerical, if they are of types `numeric`, `integer`, `Date`, `POSIXct`.
 #'   \item Categorical, if they are of type `character`, `factor`, `bool`.
 #' }
-#' Other column types are not supported. Note that it does not support inputs with a number of rows or number of columns
-#' above that of `.Machine$integer.max` (typically 2^31-1).
-#' @param sample_weights Sample observation weights for each row of `df`, with higher weights indicating either higher sampling
-#' probability (i.e. the observation has a larger effect on the fitted model, if using sub-samples), or
-#' distribution density (i.e. if the weight is two, it has the same effect of including the same data
-#' point twice), according to parameter `weights_as_sample_prob`. Not supported when calculating pairwise
-#' distances while the model is being fit (done by passing `output_dist` = `TRUE`).
-#' @param column_weights Sampling weights for each column in `df`. Ignored when picking columns by deterministic criterion.
-#' If passing `NULL`, each column will have a uniform weight. Cannot be used when weighting by kurtosis.
-#' Note that, if passing a data.frame with both numeric and categorical columns, the column names must
-#' not be repeated, otherwise the column weights passed here will not end up matching. If passing a `data.frame`
-#' to `df`, will assume the column order is the same as in there, regardless of whether the entries passed to
-#' `column_weights` are named or not.
+#' Other input and column types are not supported.
 #' @param sample_size Sample size of the data sub-samples with which each binary tree will be built.
 #' Recommended value in references [1], [2], [3], [4] is 256, while the default value in the author's code in reference [5] is
 #' `NROW(df)` (same as in here).
+#' 
+#' If passing a number between zero and one, will assume it means taking a sample size that represents
+#' that proportion of the rows in the data.
+#' 
+#' Hint: seeing a distribution of scores which is on average too far below 0.5 could mean that the
+#' model needs more trees and/or bigger samples to reach convergence (unless using non-random
+#' splits, in which case the distribution is likely to be centered around a much lower number),
+#' or that the distributions in the data are too skewed for random uniform splits.
 #' @param ntrees Number of binary trees to build for the model. Recommended value in reference [1] is 100, while the
 #' default value in the author's code in reference [5] is 10. In general, the number of trees required for good results
 #' is higher when (a) there are many columns, (b) there are categorical variables, (c) categorical variables have many
 #' categories, (d) `ndim` is high.
+#' 
+#' Hint: seeing a distribution of scores which is on average too far below 0.5 could mean that the
+#' model needs more trees and/or bigger samples to reach convergence (unless using non-random
+#' splits, in which case the distribution is likely to be centered around a much lower number),
+#' or that the distributions in the data are too skewed for random uniform splits.
 #' @param ndim Number of columns to combine to produce a split. If passing 1, will produce the single-variable model described
 #' in references [1] and [2], while if passing values greater than 1, will produce the extended model described in
 #' references [3] and [4].
 #' Recommended value in reference [4] is 2, while [3] recommends a low value such as 2 or 3. Models with values higher than 1
 #' are referred hereafter as the extended model (as in [3]).
+#' 
+#' Note that, when using `ndim>1`, the variables are standardized at each step as suggested in [4],
+#' which makes the models slightly different than in [3].
 #' @param ntry In the extended model with non-random splits, how many random combinations to try for determining the best gain.
 #' Only used when deciding splits by gain (see documentation for parameters `prob_pick_avg_gain` and `prob_pick_pooled_gain`).
-#' Recommended value in refernece [4] is 10. Ignored for single-variable model.
+#' Recommended value in reference [4] is 10. Ignored for single-variable model.
+#' @param categ_cols Columns that hold categorical features (should be an integer vector),
+#' when the data is passed as a matrix.
+#' Categorical columns should contain only integer values with a continuous numeration starting at zero,
+#' with negative values and NaN taken as missing,
+#' and the vector passed here should correspond to the column numbers, with numeration starting
+#' at one.
+#' 
+#' This is ignored when the input is passed as a `data.frame` as then it will consider columns as
+#' categorical depending on their type/class (see the documentation for `df` for details).
 #' @param max_depth Maximum depth of the binary trees to grow. By default, will limit it to the corresponding
 #' depth of a balanced binary tree with number of terminal nodes corresponding to the sub-sample size (the reason
 #' being that, if trying to detect outliers, an outlier will only be so if it turns out to be isolated with shorter average
@@ -75,6 +109,12 @@
 #' (separation depth follows a similar process with expected value calculated as in reference [6]). Default setting
 #' for references [1], [2], [3], [4] is the same as the default here, but it's recommended to pass higher values if
 #' using the model for purposes other than outlier detection.
+#' @param ncols_per_tree Number of columns to use (have as potential candidates for splitting at each iteration) in each tree,
+#' somewhat similar to the 'mtry' parameter of random forests.
+#' In general, this is only relevant when using non-random splits and/or weighting by kurtosis.
+#' 
+#' If passing a number between zero and one, will assume it means taking a sample size that represents
+#' that proportion of the columns in the data.
 #' @param prob_pick_avg_gain \itemize{
 #' \item For the single-variable model (`ndim=1`), this parameter indicates the probability
 #' of making each split by choosing a column and split point in that
@@ -93,8 +133,15 @@
 #' When splits are not made according to any of `prob_pick_avg_gain`, `prob_pick_pooled_gain`, `prob_split_avg_gain`,
 #' `prob_split_pooled_gain`, both the column and the split point are decided at random. Default setting for 
 #' references [1], [2], [3] is zero, and default for reference [4] is 1. This is the randomization parameter
-#' that can be passed to the author's original code in [5]. Note that, if passing a value of 1 (100\%) with no sub-sampling and using the
+#' that can be passed to the author's original code in [5],
+#' but note that the code in [5] suffers from a mathematical error in the calculation of running standard deviations,
+#' so the results from it might not match with this library's.
+#' 
+#' Note that, if passing a value of 1 (100\%) with no sub-sampling and using the
 #' single-variable model, every single tree will have the exact same splits.
+#' 
+#' Important detail: if using either `prob_pick_avg_gain` or `prob_pick_pooled_gain`, the distribution of
+#' outlier scores is unlikely to be centered around 0.5.
 #' @param prob_pick_pooled_gain \itemize{
 #' \item For the single-variable model (`ndim=1`), this parameter indicates the probability
 #' of making each split by choosing a column and split point in that
@@ -113,11 +160,17 @@
 #' outliers in the training data, but generalize poorly to outliers in new data and to values of variables
 #' outside of the ranges from the training data. Passing small `sample_size` and high values of this parameter will
 #' tend to flag too many outliers.
+#' 
 #' Note that, since this makes the trees more even and thus it takes more steps to produce isolated nodes,
 #' the resulting object will be heavier (use more memory). When splits are not made according to any of `prob_pick_avg_gain`,
 #' `prob_pick_pooled_gain`, `prob_split_avg_gain`, `prob_split_pooled_gain`, both the column and the split point
 #' are decided at random. Note that, if passing value = 1 (100\%) with no sub-sampling and using the single-variable model,
 #' every single tree will have the exact same splits.
+#' 
+#' Be aware that `penalize_range` can also have a large impact when using `prob_pick_pooled_gain`.
+#' 
+#' Important detail: if using either `prob_pick_avg_gain` or `prob_pick_pooled_gain`, the distribution of
+#' outlier scores is unlikely to be centered around 0.5.
 #' @param prob_split_avg_gain Probability of making each split by selecting a column at random and determining the split point as
 #' that which gives the highest averaged gain. Not supported for the extended model as the splits are on
 #' linear combinations of variables. See the documentation for parameter `prob_pick_avg_gain` for more details.
@@ -136,8 +189,8 @@
 #'   model (recommended for it).
 #'   \item `"fail"`, which will assume there are no missing values and will trigger undefined behavior if it encounters any.
 #' }
-#' In the extended model, infinite values will be treated as missing. Note that passing `"fail"` might
-#' crash the R process if there turn out to be missing values, but will otherwise produce faster fitting and prediction
+#' In the extended model, infinite values will be treated as missing.
+#' Passing `"fail"` will produce faster fitting and prediction
 #' times along with decreased model object sizes. Models from references [1], [2], [3], [4] correspond to `"fail"` here.
 #' @param new_categ_action What to do after splitting a categorical feature when new data that reaches that split has categories that
 #' the sub-sample from which the split was done did not have. Options are
@@ -181,16 +234,30 @@
 #' is only used when sub-sampling data for each tree, which is not the default in this implementation.
 #' @param sample_with_replacement Whether to sample rows with replacement or not (not recommended).
 #' Note that distance calculations, if desired, don't work when there are duplicate rows.
-#' @param penalize_range Whether to penalize (add +1 to the terminal depth) observations at prediction time that have a value
+#' @param penalize_range Whether to penalize (add -1 to the terminal depth) observations at prediction time that have a value
 #' of the chosen split variable (linear combination in extended model) that falls outside of a pre-determined
 #' reasonable range in the data being split (given by `2 * range` in data and centered around the split point),
 #' as proposed in reference [4] and implemented in the authors' original code in reference [5]. Not used in single-variable model
 #' when splitting by categorical variables.
+#' 
+#' It's recommended to turn this off for faster predictions on sparse CSC matrices.
+#' 
+#' Note that this can make a very large difference in the results when using `prob_pick_pooled_gain`.
+#' 
+#' Be aware that this option can make the distribution of outlier scores a bit different
+#' (i.e. not centered around 0.5)
 #' @param weigh_by_kurtosis Whether to weigh each column according to the kurtosis obtained in the sub-sample that is selected
 #' for each tree as briefly proposed in reference [1]. Note that this is only done at the beginning of each tree
 #' sample, so if not using sub-samples, it's better to pass column weights calculated externally. For
 #' categorical columns, will calculate expected kurtosis if the column was converted to numerical by
 #' assigning to each category a random number `~ Unif(0, 1)`.
+#' 
+#' Note that when using sparse matrices, the calculation of kurtosis will rely on a procedure that
+#' uses sums of squares and higher-power numbers, which has less numerical precision than the
+#' calculation used for dense inputs, and as such, the results might differ slightly.
+#' 
+#' Using this option makes the model more likely to pick the columns that have anomalous values
+#' when viewed as a 1-d distribution, and can bring a large improvement in some datasets.
 #' @param coefs For the extended model, whether to sample random coefficients according to a normal distribution `~ N(0, 1)`
 #' (as proposed in reference [3]) or according to a uniform distribution `~ Unif(-1, +1)` as proposed in reference [4].
 #' Ignored for the single-variable model. Note that, for categorical variables, the coefficients will be sampled ~ N (0,1)
@@ -235,13 +302,30 @@
 #' @param square_dist If passing `output_dist` = `TRUE`, whether to return a full square matrix or
 #' just the upper-triangular part, in which the entry for pair (i,j) with 1 <= i < j <= n is located at position
 #' p(i, j) = ((i - 1) * (n - i/2) + j - i).
-#' @param random_seed Seed that will be used to generate random numbers used by the model.
+#' @param sample_weights Sample observation weights for each row of `df`, with higher weights indicating either higher sampling
+#' probability (i.e. the observation has a larger effect on the fitted model, if using sub-samples), or
+#' distribution density (i.e. if the weight is two, it has the same effect of including the same data
+#' point twice), according to parameter `weights_as_sample_prob`. Not supported when calculating pairwise
+#' distances while the model is being fit (done by passing `output_dist` = `TRUE`).
+#' @param column_weights Sampling weights for each column in `df`. Ignored when picking columns by deterministic criterion.
+#' If passing `NULL`, each column will have a uniform weight. Cannot be used when weighting by kurtosis.
+#' Note that, if passing a data.frame with both numeric and categorical columns, the column names must
+#' not be repeated, otherwise the column weights passed here will not end up matching. If passing a `data.frame`
+#' to `df`, will assume the column order is the same as in there, regardless of whether the entries passed to
+#' `column_weights` are named or not.
+#' @param random_seed Seed that will be used for random number generation.
 #' @param nthreads Number of parallel threads to use. If passing a negative number, will use
 #' the maximum number of available threads in the system. Note that, the more threads,
 #' the more memory will be allocated, even if the thread does not end up being used.
+#' Be aware that most of the operations are bound by memory bandwidth, which means that
+#' adding more threads will not result in a linear speed-up. For some types of data
+#' (e.g. large sparse matrices with small sample sizes), adding more threads might result
+#' in only a very modest speed up (e.g. 1.5x faster with 4x more threads),
+#' even if all threads look fully utilized.
 #' @return If passing `output_score` = `FALSE`, `output_dist` = `FALSE`, and `output_imputations` = `FALSE` (the defaults),
-#' will output an `isolation_forest` object from which `predict` method can then be called on new data. If passing
-#' `TRUE` to any of the former options, will output a list with entries:
+#' will output an `isolation_forest` object from which `predict` method can then be called on new data.
+#' 
+#' If passing `TRUE` to any of the former options, will output a list with entries:
 #' \itemize{
 #'   \item `model`: the `isolation_forest` object from which new predictions can be made.
 #'   \item `scores`: a vector with the outlier score for each inpuit observation (if passing `output_score` = `TRUE`).
@@ -260,6 +344,7 @@
 #' \item Quinlan, J. Ross. "C4. 5: programs for machine learning." Elsevier, 2014.
 #' \item Cortes, David. "Distance approximation using Isolation Forests." arXiv preprint arXiv:1910.12362 (2019).
 #' \item Cortes, David. "Imputing missing values with unsupervised random trees." arXiv preprint arXiv:1911.06646 (2019).
+#' \item \url{https://math.stackexchange.com/questions/3333220/expected-average-depth-in-random-binary-tree-constructed-top-to-bottom}
 #' }
 #' @examples
 #' ### Example 1: detect an obvious outlier
@@ -300,7 +385,8 @@
 #' X = rbind(group1, group2)
 #' 
 #' ### Add an obvious outlier which is within the 1d ranges
-#' ### (As an interesting test, remove and see what happens)
+#' ### (As an interesting test, remove and see what happens,
+#' ###  or check how its score changes when using sub-sampling)
 #' X = rbind(X, c(-1, 1))
 #' 
 #' ### Produce heatmaps
@@ -326,6 +412,7 @@
 #'     X, ndim=1,
 #'     ntrees=100,
 #'     nthreads=1,
+#'     penalize_range=FALSE,
 #'     prob_pick_pooled_gain=0,
 #'     prob_pick_avg_gain=0)
 #' Z1 <- predict(iso_simple, space_d)
@@ -336,6 +423,7 @@
 #'      X, ndim=2,
 #'      ntrees=100,
 #'      nthreads=1,
+#'      penalize_range=FALSE,
 #'      prob_pick_pooled_gain=0,
 #'      prob_pick_avg_gain=0)
 #' Z2 <- predict(iso_ext, space_d)
@@ -346,6 +434,7 @@
 #'      X, ndim=2,
 #'      ntrees=100,
 #'      nthreads=1,
+#'      penalize_range=TRUE,
 #'      prob_pick_pooled_gain=0,
 #'      prob_pick_avg_gain=1)
 #' Z3 <- predict(iso_sci, space_d)
@@ -356,6 +445,7 @@
 #'      X, ndim=2,
 #'      ntrees=100,
 #'      nthreads=1,
+#'      penalize_range=FALSE,
 #'      prob_pick_pooled_gain=1,
 #'      prob_pick_avg_gain=0)
 #' Z4 <- predict(iso_fcf, space_d)
@@ -447,20 +537,12 @@
 #'   head(hypothyroid[order(-pred_iso), ], 20)
 #' }
 #' }
-#' @details When calculating gain, the variables are standardized at each step, so there is no need to center/scale the
-#' data beforehand.
-#' 
-#' When using sparse matrices, calculations such as standard deviations, gain, and kurtosis, will use procedures
-#' that rely on calculating sums of squared numbers. This is not a problem if most of the entries are zero and the
-#' numbers are small, but if passing dense matrices as sparse and/or the entries in the sparse matrices have values
-#' in wildly different orders of magnitude (e.g. 0.0001 and 10000000), the calculations might be incorrect due to loss of
-#' numeric precision, and the results might not be as good. For dense matrices it uses more numerically-robust
-#' techniques (which would add a large computational overhead in sparse matrices), so it's not a problem to have values
-#' with different orders of magnitude.
 #' @export
-isolation.forest <- function(df, sample_weights = NULL, column_weights = NULL,
+isolation.forest <- function(df,
                              sample_size = NROW(df), ntrees = 500, ndim = min(3, NCOL(df)),
-                             ntry = 3, max_depth = ceiling(log2(sample_size)),
+                             ntry = 3, categ_cols = NULL,
+                             max_depth = ceiling(log2(sample_size)),
+                             ncols_per_tree = NCOL(df),
                              prob_pick_avg_gain = 0.0, prob_pick_pooled_gain = 0.0,
                              prob_split_avg_gain = 0.0, prob_split_pooled_gain = 0.0,
                              min_gain = 0, missing_action = ifelse(ndim > 1, "impute", "divide"),
@@ -468,20 +550,27 @@ isolation.forest <- function(df, sample_weights = NULL, column_weights = NULL,
                              categ_split_type = "subset", all_perm = FALSE,
                              coef_by_prop = FALSE, recode_categ = TRUE,
                              weights_as_sample_prob = TRUE, sample_with_replacement = FALSE,
-                             penalize_range = TRUE, weigh_by_kurtosis = FALSE,
+                             penalize_range = FALSE, weigh_by_kurtosis = FALSE,
                              coefs = "normal", assume_full_distr = TRUE,
                              build_imputer = FALSE, output_imputations = FALSE, min_imp_obs = 3,
                              depth_imp = "higher", weigh_imp_rows = "inverse",
                              output_score = FALSE, output_dist = FALSE, square_dist = FALSE,
+                             sample_weights = NULL, column_weights = NULL,
                              random_seed = 1, nthreads = parallel::detectCores()) {
     ### validate inputs
     if (NROW(sample_size) != 1 || sample_size < 5) { stop("'sample_size' must be an integer >= 5.") }
-    check.pos.int(ntrees,       "ntrees")
-    check.pos.int(ndim,         "ndim")
-    check.pos.int(ntry,         "ntry")
-    check.pos.int(max_depth,    "max_depth")
-    check.pos.int(min_imp_obs,  "min_imp_obs")
-    check.pos.int(random_seed,  "random_seed")
+    if (NROW(ncols_per_tree) != 1) { stop("'ncols_per_tree' must be an integer or proportion.") }
+    if ((sample_size > 0) && (sample_size <= 1))
+        sample_size = as.integer(ceiling(sample_size * NROW(df)))
+    if ((ncols_per_tree > 0) && (ncols_per_tree <= 1))
+        ncols_per_tree = as.integer(ceiling(ncols_per_tree * NCOL(df)))
+    check.pos.int(ntrees,          "ntrees")
+    check.pos.int(ndim,            "ndim")
+    check.pos.int(ntry,            "ntry")
+    check.pos.int(max_depth,       "max_depth")
+    check.pos.int(min_imp_obs,     "min_imp_obs")
+    check.pos.int(random_seed,     "random_seed")
+    check.pos.int(ncols_per_tree,  "ncols_per_tree")
     
     allowed_missing_action    <-  c("divide",       "impute",   "fail")
     allowed_new_categ_action  <-  c("weighted",     "smallest", "random", "impute")
@@ -528,7 +617,7 @@ isolation.forest <- function(df, sample_weights = NULL, column_weights = NULL,
     if (is.null(min_gain) || NROW(min_gain) > 1 || is.na(min_gain) || min_gain < 0)
         stop("'min_gain' must be a decimal non-negative number.")
 
-    if ((ndim == 1) && (sample_size == NROW(df)) && (prob_pick_avg_gain >= 1 || prob_pick_pooled_gain >= 1)) {
+    if ((ndim == 1) && (sample_size == NROW(df)) && (prob_pick_avg_gain >= 1 || prob_pick_pooled_gain >= 1) && !sample_with_replacement) {
         warning(paste0("Passed parameters for deterministic single-variable splits ",
                        "with no sub-sampling. ",
                        "Every tree fitted will end up doing exactly the same splits. ",
@@ -556,6 +645,8 @@ isolation.forest <- function(df, sample_weights = NULL, column_weights = NULL,
     
     nthreads <- check.nthreads(nthreads)
     if (sample_size > NROW(df)) stop("'sample_size' cannot be greater then the number of rows in 'df'.")
+
+    categ_cols <- check.categ.cols(categ_cols)
     
     if (!is.null(sample_weights)) check.is.1d(sample_weights, "sample_weights")
     if (!is.null(column_weights)) check.is.1d(column_weights, "column_weights")
@@ -601,14 +692,15 @@ isolation.forest <- function(df, sample_weights = NULL, column_weights = NULL,
         column_weights <- get.empty.vector()
     }
     
-    sample_size  <-  as.integer(sample_size)
-    ntrees       <-  as.integer(ntrees)
-    ndim         <-  as.integer(ndim)
-    ntry         <-  as.integer(ntry)
-    max_depth    <-  as.integer(max_depth)
-    min_imp_obs  <-  as.integer(min_imp_obs)
-    random_seed  <-  as.integer(random_seed)
-    nthreads     <-  as.integer(nthreads)
+    sample_size     <-  as.integer(sample_size)
+    ntrees          <-  as.integer(ntrees)
+    ndim            <-  as.integer(ndim)
+    ntry            <-  as.integer(ntry)
+    max_depth       <-  as.integer(max_depth)
+    min_imp_obs     <-  as.integer(min_imp_obs)
+    random_seed     <-  as.integer(random_seed)
+    nthreads        <-  as.integer(nthreads)
+    ncols_per_tree  <-  as.integer(ncols_per_tree)
     
     prob_pick_avg_gain       <-  as.numeric(prob_pick_avg_gain)
     prob_pick_pooled_gain    <-  as.numeric(prob_pick_pooled_gain)
@@ -625,7 +717,7 @@ isolation.forest <- function(df, sample_weights = NULL, column_weights = NULL,
     assume_full_distr        <-  as.logical(assume_full_distr)
     
     ### split column types
-    pdata <- process.data(df, sample_weights, column_weights, recode_categ)
+    pdata <- process.data(df, sample_weights, column_weights, recode_categ, categ_cols)
     
     ### extra check for potential integer overflow
     if (all_perm && (ndim == 1) &&
@@ -644,7 +736,7 @@ isolation.forest <- function(df, sample_weights = NULL, column_weights = NULL,
                              pdata$sample_weights, pdata$column_weights,
                              pdata$nrows, pdata$ncols_num, pdata$ncols_cat, ndim, ntry,
                              coefs, coef_by_prop, sample_with_replacement, weights_as_sample_prob,
-                             sample_size, ntrees,  max_depth, FALSE,
+                             sample_size, ntrees,  max_depth, ncols_per_tree, FALSE,
                              penalize_range, output_dist, TRUE, square_dist,
                              output_score, TRUE, weigh_by_kurtosis,
                              prob_pick_avg_gain, prob_split_avg_gain,
@@ -670,6 +762,7 @@ isolation.forest <- function(df, sample_weights = NULL, column_weights = NULL,
         params  =  list(
             sample_size = sample_size, ntrees = ntrees, ndim = ndim,
             ntry = ntry, max_depth = max_depth,
+            ncols_per_tree = ncols_per_tree,
             prob_pick_avg_gain = prob_pick_avg_gain,
             prob_pick_pooled_gain = prob_pick_pooled_gain,
             prob_split_avg_gain = prob_split_avg_gain,
@@ -691,7 +784,9 @@ isolation.forest <- function(df, sample_weights = NULL, column_weights = NULL,
             ncols_cat  =  pdata$ncols_cat,
             cols_num   =  pdata$cols_num,
             cols_cat   =  pdata$cols_cat,
-            cat_levs   =  pdata$cat_levs
+            cat_levs   =  pdata$cat_levs,
+            categ_cols =  pdata$categ_cols,
+            categ_max  =  pdata$categ_max
             ),
         random_seed  =  random_seed,
         nthreads     =  nthreads,
@@ -722,7 +817,7 @@ isolation.forest <- function(df, sample_weights = NULL, column_weights = NULL,
         if (output_imputations) {
             outp$imputed   <-  reconstruct.from.imp(cpp_outputs$imputed_num,
                                                     cpp_outputs$imputed_cat,
-                                                    df, this, trans_CSC = FALSE)
+                                                    df, this, pdata)
         }
         return(outp)
     }
@@ -736,8 +831,11 @@ isolation.forest <- function(df, sample_weights = NULL, column_weights = NULL,
 #' 
 #' Note that when passing `type` = `"impute"` and `newdata` is a sparse matrix, under some situations it might get modified in-place.
 #' 
-#' Note also that, if using sparse matrices from package `Matrix`, converting to `dgRMatrix` might require using
+#' Note also that, if using sparse matrices from package `Matrix`, converting to `dgRMatrix` (when required) might require using
 #' `as(m, "RsparseMatrix")` instead of `dgRMatrix` directly.
+#' Nevertheless, if `newdata` is sparse and one wants to obtain the outlier score or average depth or tree
+#' numbers, it's highly recommended to pass it in CSC (`dgCMatrix`) format as it will be much faster
+#' when the number of trees or rows is large.
 #' @param type Type of prediction to output. Options are:
 #' \itemize{
 #'   \item `"score"` for the standardized outlier score, where values closer to 1 indicate more outlierness, while values
@@ -748,8 +846,8 @@ isolation.forest <- function(df, sample_weights = NULL, column_weights = NULL,
 #'   closer to one further away points, and closer to 0.5 average distance.
 #'   \item `"avg_sep"` for the non-standardized average separation depth.
 #'   \item `"tree_num"` for the terminal node number for each tree - if choosing this option,
-#'   will return a list containing both the outlier score and the terminal node numbers, under entries
-#'   `score` and `tree_num`, respectively.
+#'   will return a list containing both the average isolation depth and the terminal node numbers, under entries
+#'   `avg_depth` and `tree_num`, respectively.
 #'   \item `"impute"` for imputation of missing values in `newdata`.
 #' }
 #' @param square_mat When passing `type` = `"dist` or `"avg_sep"` with no `refdata`, whether to return a full square matrix or
@@ -763,13 +861,30 @@ isolation.forest <- function(df, sample_weights = NULL, column_weights = NULL,
 #' or `"avg_sep"`, will calculate pairwise distances/separation between the points in `newdata`.
 #' @param ... Not used.
 #' @return The requested prediction type, which can be: \itemize{
-#' \item A vector with one entry per row in `newdata` (for output types `"score"`, `"avg_depth"`, `"tree_num"`).
-#' \item A square matrix or vector with the upper triangular part of a square matrix
-#' (for output types `"dist"`, `"avg_sep"`, with no `refdata`)
-#' \item A matrix with points in `newdata` as rows and points in `refdata` as columns
+#' \item A numeric vector with one entry per row in `newdata` (for output types `"score"`, `"avg_depth"`).
+#' \item A list with entries `avg_depth` (numeric vector)
+#' and `tree_num` (integer matrix indicating the terminal node number under each tree for each
+#' observation, with trees as columns), for output type
+#' `"tree_num"`.
+#' \item A numeric square matrix or vector with the upper triangular part of a square matrix
+#' (for output types `"dist"`, `"avg_sep"`, with no `refdata`).
+#' \item A numeric matrix with points in `newdata` as rows and points in `refdata` as columns
 #' (for output types `"dist"`, `"avg_sep"`, with `refdata`).
 #' \item The same type as the input `newdata` (for output type `"impute"`).}
-#' @details The more threads that are set for the model, the higher the memory requirement will be as each
+#' @details The standardized outlier score is calculated according to the original paper's formula:
+#' \eqn{  2^{ - \frac{\bar{d}}{c(n)}  }  }{2^(-avg(depth)/c(nobs))}, where
+#' \eqn{\bar{d}}{avg(depth)} is the average depth under each tree at which an observation
+#' becomes isolated (a remainder is extrapolated if the actual terminal node is not isolated),
+#' and \eqn{c(n)}{c(nobs)} is the expected isolation depth if observations were uniformly random
+#' (see references under \link{isolation.forest} for details). The actual calculation
+#' of \eqn{c(n)}{c(nobs)} however differs from the paper as this package uses more exact procedures
+#' for calculation of harmonic numbers.
+#' 
+#' The distribution of outlier scores should be centered around 0.5, unless using non-random splits (parameters
+#' `prob_pick_avg_gain`, `prob_pick_pooled_gain`, `prob_split_avg_gain`, `prob_split_pooled_gain`)
+#' and/or range penalizations (which are on by default).
+#' 
+#' The more threads that are set for the model, the higher the memory requirement will be as each
 #' thread will allocate an array with one entry per row (outlierness) or combination (distance).
 #' 
 #' Outlierness predictions for sparse data will be much slower than for dense data. Not recommended to pass
@@ -785,7 +900,11 @@ isolation.forest <- function(df, sample_weights = NULL, column_weights = NULL,
 #' 
 #' The outlier scores/depth predict functionality is optimized for making predictions on one or a
 #' few rows at a time - for making large batches of predictions, it might be faster to use the
-#' `output_score=TRUE` in `isolation.forest`.
+#' option `output_score=TRUE` in `isolation.forest`.
+#' 
+#' When imputing missing values, if the input data is a `data.frame` and the model was fit to a
+#' `data.frame`, the input may contain new columns (i.e. not present when the model was fitted),
+#' which will be output as-is. If it is a matrix or sparse matrix, should not contain any new columns.
 #' @seealso \link{isolation.forest} \link{unpack.isolation.forest}
 #' @export
 predict.isolation_forest <- function(object, newdata, type="score", square_mat=FALSE, refdata=NULL, ...) {
@@ -810,22 +929,17 @@ predict.isolation_forest <- function(object, newdata, type="score", square_mat=F
     check.str.option(type, "type", allowed_type)
     check.is.bool(square_mat)
     if (!NROW(newdata)) stop("'newdata' must be a data.frame, matrix, or sparse matrix.")
-    if ((object$metadata$ncols_cat > 0) && NROW(intersect(class(newdata), get.types.spmat(TRUE, TRUE, TRUE)))) {
-        stop("Cannot pass sparse inputs if the model was fit to categorical variables.")
+    if ((object$metadata$ncols_cat > 0 && is.null(object$metadata$categ_cols)) && NROW(intersect(class(newdata), get.types.spmat(TRUE, TRUE, TRUE)))) {
+        stop("Cannot pass sparse inputs if the model was fit to categorical variables in a data.frame.")
     }
+    if ((type == "tree_num") && (object$metadata$ncols_cat > 0) && (object$params$new_categ_action == "weighted"))
+        stop("Cannot output tree number when using 'new_categ_action' = 'weighted'.")
     if ("numeric" %in% class(newdata) && is.null(dim(newdata))) {
         newdata <- matrix(newdata, nrow=1)
     }
-    if (NCOL(newdata) < (object$metadata$ncols_num + object$metadata$ncols_cat)) {
-        if ("dsparseVector" %in% class(newdata)) {
-            if (NROW(newdata) != object$metadata$ncols_num)
-                stop("'newdata' has different number of columns than the original data.")
-        } else {
-            stop("'newdata' has fewer columns than the original data.")
-        }
-    }
+    
     if (type %in% c("dist", "avg_sep")) {
-        if (object$params$new_categ_action == "weighted" && object$params$missing_action != "divide") {
+        if (object$metadata$ncols_cat > 0 && object$params$new_categ_action == "weighted" && object$params$missing_action != "divide") {
             stop(paste0("Cannot predict distances when using ",
                         "'new_categ_action' = 'weighted' ",
                         "if 'missing_action' != 'divide'."))
@@ -841,8 +955,10 @@ predict.isolation_forest <- function(object, newdata, type="score", square_mat=F
         newdata     <- rbind(newdata, refdata)
     }
     
-    pdata <- process.data.new(newdata, object$metadata, !(type %in% c("dist", "avg_sep")), type != "impute")
-    
+    pdata <- process.data.new(newdata, object$metadata,
+                              !(type %in% c("dist", "avg_sep")),
+                              type != "impute", type == "impute")
+
     square_mat   <-  as.logical(square_mat)
     score_array  <-  get.empty.vector()
     dist_tmat    <-  get.empty.vector()
@@ -870,7 +986,7 @@ predict.isolation_forest <- function(object, newdata, type="score", square_mat=F
                     pdata$Xr, pdata$Xr_ind, pdata$Xr_indptr,
                     pdata$nrows, object$nthreads, type == "score")
         if (type == "tree_num")
-            return(list(score = score_array, tree_num = matrix(tree_num + 1L, nrow = pdata$nrows, ncol = object$params$ntrees)))
+            return(list(avg_depth = score_array, tree_num = matrix(tree_num + 1L, nrow = pdata$nrows, ncol = object$params$ntrees)))
         else
             return(score_array)
     } else if (type != "impute") {
@@ -894,7 +1010,7 @@ predict.isolation_forest <- function(object, newdata, type="score", square_mat=F
         return(reconstruct.from.imp(imp$X_num,
                                     imp$X_cat,
                                     newdata, object,
-                                    trans_CSC = TRUE))
+                                    pdata))
     }
 }
 
@@ -1038,7 +1154,7 @@ add.isolation.tree <- function(model, df, sample_weights = NULL, column_weights 
                                              pdata$nrows, model$metadata$ncols_num, model$metadata$ncols_cat,
                                              model$params$ndim, model$params$ntry,
                                              model$params$coefs, model$params$coef_by_prop,
-                                             model$params$max_depth,
+                                             model$params$max_depth, model$params$ncols_per_tree,
                                              FALSE, model$params$penalize_range,
                                              model$params$weigh_by_kurtosis,
                                              model$params$prob_pick_avg_gain, model$params$prob_split_avg_gain,
@@ -1073,6 +1189,12 @@ add.isolation.tree <- function(model, df, sample_weights = NULL, column_weights 
 #' it is called (i.e. if it's desired to call `predict` from inside multiple functions, use this function before passing the
 #' freshly-loaded model object to those other functions, and then they will not need to reconstruct the C++ objects anymore),
 #' in the same way as `predict` or `print`, but without producing any outputs or messages.
+#' 
+#' It is an equivalent to XGBoost's `xgb.Booster.complete` function.
+#' @details If using this function to de-serialize a model in a production system, one might
+#' want to delete the serialized bytes inside the object afterwards in order to free up memory.
+#' These are under `model$cpp_obj$serialized` (plus `model$cpp_obj$imp_ser` if building with imputer)
+#' - e.g.: `model$cpp_obj$serialized = NULL; model$cpp_obj$imp_ser = NULL; gc()`.
 #' @param model An Isolation Forest object as returned by `isolation.forest`, which has been just loaded from a disk
 #' file through `readRDS`, `load`, or a session restart.
 #' @return The same model object that was passed as input. Object is modified in-place
@@ -1227,8 +1349,8 @@ get.num.nodes <- function(model)  {
 #' 
 #' ### The new predicted scores will be a weighted average
 #' ### (Be aware that, due to round-off, it will not match with '==')
-#' nodes.comb$score
-#' (3*nodes1$score + 2*nodes2$score) / 5
+#' nodes.comb$avg_depth
+#' (3*nodes1$avg_depth + 2*nodes2$avg_depth) / 5
 #' @export
 append.trees <- function(model, other) {
     if (!("isolation_forest" %in% class(model)) || !("isolation_forest" %in% class(other))) {
@@ -1257,8 +1379,9 @@ append.trees <- function(model, other) {
 #' @description Save Isolation Forest model to a serialized file along with its
 #' metadata, in order to be used in the Python or the C++ versions of this package.
 #' 
-#' This function is not meant to be used for passing models to and from R -
-#' in such case, you can use `saveRDS` and `readRDS` instead.
+#' This function is not suggested to be used for passing models to and from R -
+#' in such case, one can use `saveRDS` and `readRDS` instead, although the function
+#' still works correctly for serializing objects between R sessions.
 #' 
 #' Note that, if the model was fitted to a `data.frame`, the column names must be
 #' something exportable as JSON, and must be something that Python's Pandas could
@@ -1276,7 +1399,9 @@ append.trees <- function(model, other) {
 #' The metadata will contain, among other things, the encoding that was used for
 #' categorical columns - this is under `data_info.cat_levels`, as an array of arrays by column,
 #' with the first entry for each column corresponding to category 0, second to category 1,
-#' and so on (the C++ version takes them as integers). This metadata is written to a JSON file
+#' and so on (the C++ version takes them as integers). When passing `categ_cols`, there
+#' will be no encoding but it will save the maximum category integer and the column
+#' numbers instead of names. This metadata is written to a JSON file
 #' using the `jsonlite` package, which must be installed in order for this to work.
 #' 
 #' The serialized file can be used in the C++ version by reading it as a binary raw file
@@ -1284,6 +1409,9 @@ append.trees <- function(model, other) {
 #' for de-serialization. If using `ndim=1`, it will be an object of class `IsoForest`, and if
 #' using `ndim>1`, will be an object of class `ExtIsoForest`. The imputer file, if produced, will
 #' be an object of class `Imputer`.
+#' 
+#' Be aware that this function will write raw bytes from memory as-is without compression,
+#' so the file sizes can end up being much larger than when using `saveRDS`.
 #' 
 #' The metadata is not used in the C++ version, but is necessary for the Python version.
 #' 
@@ -1332,6 +1460,11 @@ export.isotree.model <- function(model, file, ...) {
 #' Note: If the model was fit to a ``DataFrame`` using Pandas' own Boolean types,
 #' take a look at the metadata to check if these columns will be taken as booleans
 #' (R logicals) or as categoricals with string values `"True"` or `"False"`.
+#' 
+#' If using this function to de-serialize a model in a production system, one might
+#' want to delete the serialized bytes inside the object afterwards in order to free up memory.
+#' These are under `model$cpp_obj$serialized` (plus `model$cpp_obj$imp_ser` if building with imputer)
+#' - e.g.: `model$cpp_obj$serialized = NULL; model$cpp_obj$imp_ser = NULL; gc()`.
 #' @return An isolation forest model, as if it had been constructed through
 #' \link{isolation.forest}.
 #' @seealso \link{export.isotree.model} \link{unpack.isolation.forest}
@@ -1379,7 +1512,7 @@ load.isotree.model <- function(file) {
 #' lay well beyond the character limit of commands accepted by SQL vendors.
 #' \item The generated SQL statements will not include range penalizations, thus
 #' predictions might differ from calls to `predict` when using
-#' `penalize_range=TRUE` (which is the default).
+#' `penalize_range=TRUE`.
 #' \item The generated SQL statements will only include handling of missing values
 #' when using `missing_action="impute"`. When using the single-variable
 #' model with categorical variables + subset splits, the rule buckets might be

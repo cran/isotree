@@ -22,7 +22,7 @@
 *     [9] Cortes, David. "Imputing missing values with unsupervised random trees." arXiv preprint arXiv:1911.06646 (2019).
 * 
 *     BSD 2-Clause License
-*     Copyright (c) 2020, David Cortes
+*     Copyright (c) 2019-2021, David Cortes
 *     All rights reserved.
 *     Redistribution and use in source and binary forms, with or without
 *     modification, are permitted provided that the following conditions are met:
@@ -42,25 +42,55 @@
 *     OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 *     OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
-#include "isotree.h"
 
-/* Reason behind this file: Cython (as of v0.29) will not auto-deallocate
-   structs which are part of a cdef'd class, which produces a memory leak
-   but can be force-destructed. Unfortunately, Cython itself doesn't even
-   allow calling destructors for structs, so it has to be done externally.
-   These functions should otherwise have no reason to be. */
+/*  Note: the R and Python versions calls the 'sort_csc_indices' templated function,
+    so it's not enough to just include 'isotree_exportable.hpp' under them and let
+    this same file instantiate all supported templated types.
+    Also, Cython makes it hard to use overloaded functions since they have to
+    be declared multiple times. */
 
-void dealloc_IsoForest(IsoForest &model_outputs)
-{
-    model_outputs.~IsoForest();
-}
+#if !defined(_FOR_R) && !defined(_FOR_PYTHON)
 
-void dealloc_IsoExtForest(ExtIsoForest &model_outputs_ext)
-{
-    model_outputs_ext.~ExtIsoForest();
-}
+#include "model_joined.h"
 
-void dealloc_Imputer(Imputer &imputer)
-{
-    imputer.~Imputer();
-}
+#define real_t double
+#define sparse_ix int
+#include "instantiate_model.h"
+#undef real_t
+#undef sparse_ix
+
+#define real_t double
+#define sparse_ix int64_t
+#include "instantiate_model.h"
+#undef real_t
+#undef sparse_ix
+
+#define real_t double
+#define sparse_ix size_t
+#include "instantiate_model.h"
+#undef real_t
+#undef sparse_ix
+
+#define _NO_REAL_T
+
+#define real_t float
+#define sparse_ix int
+#include "instantiate_model.h"
+#undef real_t
+#undef sparse_ix
+
+#define real_t float
+#define sparse_ix int64_t
+#include "instantiate_model.h"
+#undef real_t
+#undef sparse_ix
+
+#define real_t float
+#define sparse_ix size_t
+#include "instantiate_model.h"
+#undef real_t
+#undef sparse_ix
+
+#undef _NO_REAL_T
+
+#endif

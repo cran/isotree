@@ -17,12 +17,12 @@ check_null_ptr_model <- function(ptr_model) {
     .Call(`_isotree_check_null_ptr_model`, ptr_model)
 }
 
-fit_model <- function(X_num, X_cat, ncat, Xc, Xc_ind, Xc_indptr, sample_weights, col_weights, nrows, ncols_numeric, ncols_categ, ndim, ntry, coef_type, coef_by_prop, with_replacement, weight_as_sample, sample_size, ntrees, max_depth, limit_depth, penalize_range, calc_dist, standardize_dist, sq_dist, calc_depth, standardize_depth, weigh_by_kurt, prob_pick_by_gain_avg, prob_split_by_gain_avg, prob_pick_by_gain_pl, prob_split_by_gain_pl, min_gain, cat_split_type, new_cat_action, missing_action, all_perm, build_imputer, output_imputations, min_imp_obs, depth_imp, weigh_imp_rows, random_seed, nthreads) {
-    .Call(`_isotree_fit_model`, X_num, X_cat, ncat, Xc, Xc_ind, Xc_indptr, sample_weights, col_weights, nrows, ncols_numeric, ncols_categ, ndim, ntry, coef_type, coef_by_prop, with_replacement, weight_as_sample, sample_size, ntrees, max_depth, limit_depth, penalize_range, calc_dist, standardize_dist, sq_dist, calc_depth, standardize_depth, weigh_by_kurt, prob_pick_by_gain_avg, prob_split_by_gain_avg, prob_pick_by_gain_pl, prob_split_by_gain_pl, min_gain, cat_split_type, new_cat_action, missing_action, all_perm, build_imputer, output_imputations, min_imp_obs, depth_imp, weigh_imp_rows, random_seed, nthreads)
+fit_model <- function(X_num, X_cat, ncat, Xc, Xc_ind, Xc_indptr, sample_weights, col_weights, nrows, ncols_numeric, ncols_categ, ndim, ntry, coef_type, coef_by_prop, with_replacement, weight_as_sample, sample_size, ntrees, max_depth, ncols_per_tree, limit_depth, penalize_range, calc_dist, standardize_dist, sq_dist, calc_depth, standardize_depth, weigh_by_kurt, prob_pick_by_gain_avg, prob_split_by_gain_avg, prob_pick_by_gain_pl, prob_split_by_gain_pl, min_gain, cat_split_type, new_cat_action, missing_action, all_perm, build_imputer, output_imputations, min_imp_obs, depth_imp, weigh_imp_rows, random_seed, nthreads) {
+    .Call(`_isotree_fit_model`, X_num, X_cat, ncat, Xc, Xc_ind, Xc_indptr, sample_weights, col_weights, nrows, ncols_numeric, ncols_categ, ndim, ntry, coef_type, coef_by_prop, with_replacement, weight_as_sample, sample_size, ntrees, max_depth, ncols_per_tree, limit_depth, penalize_range, calc_dist, standardize_dist, sq_dist, calc_depth, standardize_depth, weigh_by_kurt, prob_pick_by_gain_avg, prob_split_by_gain_avg, prob_pick_by_gain_pl, prob_split_by_gain_pl, min_gain, cat_split_type, new_cat_action, missing_action, all_perm, build_imputer, output_imputations, min_imp_obs, depth_imp, weigh_imp_rows, random_seed, nthreads)
 }
 
-fit_tree <- function(model_R_ptr, X_num, X_cat, ncat, Xc, Xc_ind, Xc_indptr, sample_weights, col_weights, nrows, ncols_numeric, ncols_categ, ndim, ntry, coef_type, coef_by_prop, max_depth, limit_depth, penalize_range, weigh_by_kurt, prob_pick_by_gain_avg, prob_split_by_gain_avg, prob_pick_by_gain_pl, prob_split_by_gain_pl, min_gain, cat_split_type, new_cat_action, missing_action, build_imputer, min_imp_obs, imp_R_ptr, depth_imp, weigh_imp_rows, all_perm, random_seed) {
-    .Call(`_isotree_fit_tree`, model_R_ptr, X_num, X_cat, ncat, Xc, Xc_ind, Xc_indptr, sample_weights, col_weights, nrows, ncols_numeric, ncols_categ, ndim, ntry, coef_type, coef_by_prop, max_depth, limit_depth, penalize_range, weigh_by_kurt, prob_pick_by_gain_avg, prob_split_by_gain_avg, prob_pick_by_gain_pl, prob_split_by_gain_pl, min_gain, cat_split_type, new_cat_action, missing_action, build_imputer, min_imp_obs, imp_R_ptr, depth_imp, weigh_imp_rows, all_perm, random_seed)
+fit_tree <- function(model_R_ptr, X_num, X_cat, ncat, Xc, Xc_ind, Xc_indptr, sample_weights, col_weights, nrows, ncols_numeric, ncols_categ, ndim, ntry, coef_type, coef_by_prop, max_depth, ncols_per_tree, limit_depth, penalize_range, weigh_by_kurt, prob_pick_by_gain_avg, prob_split_by_gain_avg, prob_pick_by_gain_pl, prob_split_by_gain_pl, min_gain, cat_split_type, new_cat_action, missing_action, build_imputer, min_imp_obs, imp_R_ptr, depth_imp, weigh_imp_rows, all_perm, random_seed) {
+    .Call(`_isotree_fit_tree`, model_R_ptr, X_num, X_cat, ncat, Xc, Xc_ind, Xc_indptr, sample_weights, col_weights, nrows, ncols_numeric, ncols_categ, ndim, ntry, coef_type, coef_by_prop, max_depth, ncols_per_tree, limit_depth, penalize_range, weigh_by_kurt, prob_pick_by_gain_avg, prob_split_by_gain_avg, prob_pick_by_gain_pl, prob_split_by_gain_pl, min_gain, cat_split_type, new_cat_action, missing_action, build_imputer, min_imp_obs, imp_R_ptr, depth_imp, weigh_imp_rows, all_perm, random_seed)
 }
 
 predict_iso <- function(model_R_ptr, outp, tree_num, is_extended, X_num, X_cat, Xc, Xc_ind, Xc_indptr, Xr, Xr_ind, Xr_indptr, nrows, nthreads, standardize) {
@@ -55,5 +55,49 @@ model_to_sql_with_select_from <- function(model_R_ptr, is_extended, numeric_cola
 
 copy_cpp_objects <- function(model_R_ptr, is_extended, imp_R_ptr, has_imputer) {
     .Call(`_isotree_copy_cpp_objects`, model_R_ptr, is_extended, imp_R_ptr, has_imputer)
+}
+
+call_sort_csc_indices <- function(Xc, Xc_ind, Xc_indptr) {
+    invisible(.Call(`_isotree_call_sort_csc_indices`, Xc, Xc_ind, Xc_indptr))
+}
+
+call_reconstruct_csr_sliced <- function(orig_Xr, orig_Xr_indptr, rec_Xr, rec_Xr_indptr, nrows) {
+    invisible(.Call(`_isotree_call_reconstruct_csr_sliced`, orig_Xr, orig_Xr_indptr, rec_Xr, rec_Xr_indptr, nrows))
+}
+
+call_reconstruct_csr_with_categ <- function(orig_Xr, orig_Xr_ind, orig_Xr_indptr, rec_Xr, rec_Xr_ind, rec_Xr_indptr, rec_X_cat, cols_numeric, cols_categ, nrows, ncols) {
+    invisible(.Call(`_isotree_call_reconstruct_csr_with_categ`, orig_Xr, orig_Xr_ind, orig_Xr_indptr, rec_Xr, rec_Xr_ind, rec_Xr_indptr, rec_X_cat, cols_numeric, cols_categ, nrows, ncols))
+}
+
+deepcopy_vector <- function(inp) {
+    .Call(`_isotree_deepcopy_vector`, inp)
+}
+
+call_take_cols_by_slice_csr <- function(Xr_, Xr_ind_, Xr_indptr, ncols_take, as_dense) {
+    .Call(`_isotree_call_take_cols_by_slice_csr`, Xr_, Xr_ind_, Xr_indptr, ncols_take, as_dense)
+}
+
+call_take_cols_by_index_csr <- function(Xr, Xr_ind, Xr_indptr, cols_take, as_dense) {
+    .Call(`_isotree_call_take_cols_by_index_csr`, Xr, Xr_ind, Xr_indptr, cols_take, as_dense)
+}
+
+call_take_cols_by_slice_csc <- function(Xc, Xc_ind, Xc_indptr, ncols_take, as_dense, nrows) {
+    .Call(`_isotree_call_take_cols_by_slice_csc`, Xc, Xc_ind, Xc_indptr, ncols_take, as_dense, nrows)
+}
+
+call_take_cols_by_index_csc <- function(Xc_, Xc_ind_, Xc_indptr, cols_take, as_dense, nrows) {
+    .Call(`_isotree_call_take_cols_by_index_csc`, Xc_, Xc_ind_, Xc_indptr, cols_take, as_dense, nrows)
+}
+
+copy_csc_cols_by_slice <- function(out_Xc_, out_Xc_indptr, from_Xc_, from_Xc_indptr, n_copy) {
+    invisible(.Call(`_isotree_copy_csc_cols_by_slice`, out_Xc_, out_Xc_indptr, from_Xc_, from_Xc_indptr, n_copy))
+}
+
+copy_csc_cols_by_index <- function(out_Xc_, out_Xc_indptr, from_Xc_, from_Xc_indptr, cols_copy) {
+    invisible(.Call(`_isotree_copy_csc_cols_by_index`, out_Xc_, out_Xc_indptr, from_Xc_, from_Xc_indptr, cols_copy))
+}
+
+assign_csc_cols <- function(Xc_, Xc_ind_, Xc_indptr, X_cat_, cols_categ, cols_numeric, nrows) {
+    .Call(`_isotree_assign_csc_cols`, Xc_, Xc_ind_, Xc_indptr, X_cat_, cols_categ, cols_numeric, nrows)
 }
 

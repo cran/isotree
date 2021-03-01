@@ -32,6 +32,14 @@ This function serves as an environment-level unpacker that will reconstruct the 
 it is called (i.e. if it's desired to call `predict` from inside multiple functions, use this function before passing the
 freshly-loaded model object to those other functions, and then they will not need to reconstruct the C++ objects anymore),
 in the same way as `predict` or `print`, but without producing any outputs or messages.
+
+It is an equivalent to XGBoost's `xgb.Booster.complete` function.
+}
+\details{
+If using this function to de-serialize a model in a production system, one might
+want to delete the serialized bytes inside the object afterwards in order to free up memory.
+These are under `model$cpp_obj$serialized` (plus `model$cpp_obj$imp_ser` if building with imputer)
+- e.g.: `model$cpp_obj$serialized = NULL; model$cpp_obj$imp_ser = NULL; gc()`.
 }
 \examples{
 ### Warning: this example will generate a temporary .Rds
