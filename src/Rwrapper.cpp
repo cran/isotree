@@ -72,10 +72,17 @@
     so it's not enough to just include 'isotree_exportable.hpp' and let
     the templates be instantiated elsewhere. */
 
+#define throw_mem_err() Rcpp::stop("Error: insufficient memory. Try smaller sample sizes and fewer trees.\n")
 
 SEXP alloc_RawVec(void *data)
 {
     return Rcpp::RawVector(*(size_t*)data);
+}
+
+SEXP safe_copy_vec(void *data)
+{
+    std::vector<double> *vec = (std::vector<double>*)data;
+    return Rcpp::NumericVector(vec->begin(), vec->end());
 }
 
 /* for model serialization and re-usage in R */
@@ -281,19 +288,19 @@ Rcpp::List fit_model(Rcpp::NumericVector X_num, Rcpp::IntegerVector X_cat, Rcpp:
 
     if (calc_dist)
     {
-        tmat      =  Rcpp::NumericVector((nrows * (nrows - 1)) / 2);
-        tmat_ptr  =  &tmat[0];
+        tmat      =  Rcpp::NumericVector((nrows * (nrows - (size_t)1)) / (size_t)2);
+        tmat_ptr  =  REAL(tmat);
         if (sq_dist)
         {
-            dmat      =  Rcpp::NumericMatrix(nrows);
-            dmat_ptr  =  &dmat(0, 0);
+            dmat      =  Rcpp::NumericMatrix(nrows, nrows);
+            dmat_ptr  =  REAL(dmat);
         }
     }
 
     if (calc_depth)
     {
         depths      =  Rcpp::NumericVector(nrows);
-        depths_ptr  =  &depths[0];
+        depths_ptr  =  REAL(depths);
     }
 
     std::unique_ptr<IsoForest>     model_ptr      =  std::unique_ptr<IsoForest>();
@@ -308,7 +315,9 @@ Rcpp::List fit_model(Rcpp::NumericVector X_num, Rcpp::IntegerVector X_cat, Rcpp:
     if (build_imputer)
         imputer_ptr    =  std::unique_ptr<Imputer>(new Imputer());
 
-    int ret_val = 
+    int ret_val;
+    try {
+    ret_val = 
     fit_iforest(model_ptr.get(), ext_model_ptr.get(),
                 numeric_data_ptr,  ncols_numeric,
                 categ_data_ptr,    ncols_categ,    ncat_ptr,
@@ -327,6 +336,10 @@ Rcpp::List fit_model(Rcpp::NumericVector X_num, Rcpp::IntegerVector X_cat, Rcpp:
                 all_perm, imputer_ptr.get(), min_imp_obs,
                 depth_imp_C, weigh_imp_rows_C, output_imputations,
                 (uint64_t) random_seed, nthreads);
+    }
+    catch (std::bad_alloc &e) {
+        throw_mem_err();
+    }
     Rcpp::checkUserInterrupt();
 
     if (ret_val == EXIT_FAILURE)
@@ -339,10 +352,15 @@ Rcpp::List fit_model(Rcpp::NumericVector X_num, Rcpp::IntegerVector X_cat, Rcpp:
 
     bool serialization_failed = false;
     Rcpp::RawVector serialized_obj;
-    if (ndim == 1)
-        serialized_obj  =  serialize_cpp_obj(model_ptr.get());
-    else
-        serialized_obj  =  serialize_cpp_obj(ext_model_ptr.get());
+    try {
+        if (ndim == 1)
+            serialized_obj  =  serialize_cpp_obj(model_ptr.get());
+        else
+            serialized_obj  =  serialize_cpp_obj(ext_model_ptr.get());
+    }
+    catch (std::bad_alloc &e) {
+        throw_mem_err();
+    }
     if (!serialized_obj.size()) serialization_failed = true;
     if (serialization_failed) {
         if (ndim == 1)
@@ -369,7 +387,12 @@ Rcpp::List fit_model(Rcpp::NumericVector X_num, Rcpp::IntegerVector X_cat, Rcpp:
 
     if (build_imputer && !serialization_failed)
     {
-        outp["imputer_ser"] =  serialize_cpp_obj(imputer_ptr.get());
+        try {
+            outp["imputer_ser"] =  serialize_cpp_obj(imputer_ptr.get());
+        }
+        catch (std::bad_alloc &e) {
+            throw_mem_err();
+        }
         if (!Rf_xlength(outp["imputer_ser"]))
         {
             serialization_failed = true;
@@ -386,7 +409,7 @@ Rcpp::List fit_model(Rcpp::NumericVector X_num, Rcpp::IntegerVector X_cat, Rcpp:
 
     if (output_imputations && !serialization_failed)
     {
-        outp["imputed_num"] = Rcpp::NumericVector(Xcpp.begin(), Xcpp.end());
+        outp["imputed_num"] = Rcpp::unwindProtect(safe_copy_vec, (void*)&Xcpp);
         outp["imputed_cat"] = X_cat;
     }
 
@@ -620,8 +643,8 @@ void predict_iso(SEXP model_R_ptr, Rcpp::NumericVector outp, Rcpp::IntegerVector
 }
 
 // [[Rcpp::export(rng = false)]]
-void dist_iso(SEXP model_R_ptr, Rcpp::NumericVector tmat, Rcpp::NumericVector dmat,
-              Rcpp::NumericVector rmat, bool is_extended,
+void dist_iso(SEXP model_R_ptr, Rcpp::NumericVector tmat, Rcpp::NumericMatrix dmat,
+              Rcpp::NumericMatrix rmat, bool is_extended,
               Rcpp::NumericVector X_num, Rcpp::IntegerVector X_cat,
               Rcpp::NumericVector Xc, Rcpp::IntegerVector Xc_ind, Rcpp::IntegerVector Xc_indptr,
               size_t nrows, int nthreads, bool assume_full_distr,
@@ -653,9 +676,9 @@ void dist_iso(SEXP model_R_ptr, Rcpp::NumericVector tmat, Rcpp::NumericVector dm
         Xc_indptr_ptr  =  &Xc_indptr[0];
     }
 
-    double*  tmat_ptr    =  n_from? (double*)NULL : &tmat[0];
-    double*  dmat_ptr    =  (sq_dist & !n_from)? &dmat[0] : NULL;
-    double*  rmat_ptr    =  n_from? &rmat[0] : NULL;
+    double*  tmat_ptr    =  n_from? (double*)NULL : REAL(tmat);
+    double*  dmat_ptr    =  (sq_dist & !n_from)? REAL(dmat) : NULL;
+    double*  rmat_ptr    =  n_from? REAL(rmat) : NULL;
 
     IsoForest*     model_ptr      =  NULL;
     ExtIsoForest*  ext_model_ptr  =  NULL;
@@ -1392,6 +1415,57 @@ Rcpp::List assign_csc_cols
         Rcpp::_["Xc_ind"] = Rcpp::IntegerVector(out_Xc_ind.begin(), out_Xc_ind.end()),
         Rcpp::_["Xc_indptr"] = Rcpp::IntegerVector(out_Xc_indptr.begin(), out_Xc_indptr.end())
     );
+}
+
+/* These are helpers for dealing with large integers and R's copy-on-write semantics */
+
+// [[Rcpp::export(rng = false)]]
+Rcpp::NumericVector get_empty_tmat(int nrows_)
+{
+    size_t nrows = (size_t)nrows_;
+    size_t tmat_size = (nrows * (nrows - (size_t)1)) / (size_t)2;
+    return Rcpp::NumericVector((R_xlen_t)tmat_size);
+}
+
+// [[Rcpp::export(rng = false)]]
+Rcpp::IntegerMatrix get_empty_int_mat(int nrows, int ncols)
+{
+    return Rcpp::IntegerMatrix(nrows, ncols);
+}
+
+// [[Rcpp::export(rng = false)]]
+Rcpp::IntegerMatrix get_null_int_mat()
+{
+    return Rcpp::IntegerMatrix(0, 0);
+}
+
+// [[Rcpp::export(rng = false)]]
+int get_ntrees(SEXP model_R_ptr, bool is_extended)
+{
+    if (is_extended) {
+        ExtIsoForest* ext_model_ptr = static_cast<ExtIsoForest*>(R_ExternalPtrAddr(model_R_ptr));
+        return ext_model_ptr->hplanes.size();
+    }
+    
+    else {
+        IsoForest* model_ptr = static_cast<IsoForest*>(R_ExternalPtrAddr(model_R_ptr));
+        return model_ptr->trees.size();
+    }
+}
+
+// [[Rcpp::export(rng = false)]]
+void increment_by1(SEXP int_var)
+{
+    int *val = INTEGER(int_var);
+    *val = *val + 1;
+}
+
+// [[Rcpp::export(rng = false)]]
+void inplace_add(SEXP add_to, SEXP add_this)
+{
+    int *val = INTEGER(add_to);
+    int *summand = INTEGER(add_this);
+    *val = *val + *summand;
 }
 
 #endif /* _FOR_R */

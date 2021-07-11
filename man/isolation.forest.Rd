@@ -6,7 +6,7 @@
 \usage{
 isolation.forest(
   df,
-  sample_size = NROW(df),
+  sample_size = min(NROW(df), 10000L),
   ntrees = 500,
   ndim = min(3, NCOL(df)),
   ntry = 3,
@@ -61,10 +61,15 @@ Other input and column types are not supported.}
 
 \item{sample_size}{Sample size of the data sub-samples with which each binary tree will be built.
 Recommended value in references [1], [2], [3], [4] is 256, while the default value in the author's code in reference [5] is
-`NROW(df)` (same as in here).
+`nrow(df)`.
+
+If passing `NULL`, will take the full number of rows in the data (no sub-sampling).
 
 If passing a number between zero and one, will assume it means taking a sample size that represents
 that proportion of the rows in the data.
+
+Note that sub-sampling is incompatible with `output_score`, `output_dist`, and `output_imputations`,
+and if any of those options is requested, `sample_size` will be overriden.
 
 Hint: seeing a distribution of scores which is on average too far below 0.5 could mean that the
 model needs more trees and/or bigger samples to reach convergence (unless using non-random
@@ -134,7 +139,7 @@ split point in the chosen linear combination of variables will be decided by thi
 }
 Compared to a pooled average, this tends to result in more cases in which a single observation or very few of them
 are put into one branch. Recommended to use sub-samples (parameter `sample_size`) when passing this parameter.
-Note that, since this will created isolated nodes faster, the resulting object will be lighter (use less memory).
+Note that, since this will create isolated nodes faster, the resulting object will be lighter (use less memory).
 When splits are not made according to any of `prob_pick_avg_gain`, `prob_pick_pooled_gain`, `prob_split_avg_gain`,
 `prob_split_pooled_gain`, both the column and the split point are decided at random. Default setting for 
 references [1], [2], [3] is zero, and default for reference [4] is 1. This is the randomization parameter
@@ -301,7 +306,10 @@ inside the model are treated differently and follow their own imputation or divi
 
 \item{output_imputations}{Whether to output imputed missing values for `df`. Passing `TRUE` here will force
 `build_imputer` to `TRUE`. Note that, for sparse matrix inputs, even though the output will be sparse, it will
-generate a dense representation of each row with missing values.}
+generate a dense representation of each row with missing values.
+
+This is not supported when using sub-sampling, and if sub-sampling is specified, will override it
+using the full number of rows.}
 
 \item{min_imp_obs}{Minimum number of observations with which an imputation value can be produced. Ignored if passing
 `build_imputer` = `FALSE`.}
@@ -321,12 +329,18 @@ and not recommended to change from the default. Ignored when passing `build_impu
 \item{output_score}{Whether to output outlierness scores for the input data, which will be calculated as
 the model is being fit and it's thus faster. Cannot be done when using sub-samples of the data for each tree
 (in such case will later need to call the `predict` function on the same data). If using `penalize_range`, the
-results from this might differet a bit from those of `predict` called after.}
+results from this might differet a bit from those of `predict` called after.
+
+This is not supported when using sub-sampling, and if sub-sampling is specified, will override it
+using the full number of rows.}
 
 \item{output_dist}{Whether to output pairwise distances for the input data, which will be calculated as
 the model is being fit and it's thus faster. Cannot be done when using sub-samples of the data for each tree
 (in such case will later need to call the `predict` function on the same data). If using `penalize_range`, the
-results from this might differ a bit from those of `predict` called after.}
+results from this might differ a bit from those of `predict` called after.
+
+This is not supported when using sub-sampling, and if sub-sampling is specified, will override it
+using the full number of rows.}
 
 \item{square_dist}{If passing `output_dist` = `TRUE`, whether to return a full square matrix or
 just the upper-triangular part, in which the entry for pair (i,j) with 1 <= i < j <= n is located at position
@@ -336,7 +350,11 @@ p(i, j) = ((i - 1) * (n - i/2) + j - i).}
 probability (i.e. the observation has a larger effect on the fitted model, if using sub-samples), or
 distribution density (i.e. if the weight is two, it has the same effect of including the same data
 point twice), according to parameter `weights_as_sample_prob`. Not supported when calculating pairwise
-distances while the model is being fit (done by passing `output_dist` = `TRUE`).}
+distances while the model is being fit (done by passing `output_dist` = `TRUE`).
+
+If `df` is a `data.frame` and the variable passed here matches to the name of a column in `df`
+(with or without enclosing `sample_weights` in quotes), it will assume the weights are to be
+taken as that column name.}
 
 \item{column_weights}{Sampling weights for each column in `df`. Ignored when picking columns by deterministic criterion.
 If passing `NULL`, each column will have a uniform weight. Cannot be used when weighting by kurtosis.
@@ -382,7 +400,7 @@ This version adds heuristics to handle missing data and categorical variables. C
 distances by checking the depth after which two observations become separated, and to approximate densities by fitting
 trees beyond balanced-tree limit. Offers options to vary between randomized and deterministic splits too.
 
-Important: The default parameters in this software do not correspond to the suggested parameters in
+\bold{Important:} The default parameters in this software do not correspond to the suggested parameters in
 any of the references.
 In particular, the following default values are likely to cause huge differences when compared to the
 defaults in other software: `ndim`, `sample_size`, `ntrees`. The defaults here are
@@ -521,6 +539,8 @@ Z4 <- predict(iso_fcf, space_d)
 plot.space(Z4, "Fair-Cut Forest")
 par(oldpar)
 
+### (As another interesting variation, try setting
+###  'penalize_range=TRUE' for the last model)
 
 ### Example 3: calculating pairwise distances,
 ### with a short validation against euclidean dist.
@@ -555,8 +575,7 @@ library(isotree)
 ### Generate random data, set some values as NA
 if (require("MASS")) {
   set.seed(1)
-  S <- matrix(rnorm(5 * 5), nrow = 5)
-  S <- t(S) \%*\% S
+  S <- crossprod(matrix(rnorm(5 * 5), nrow = 5))
   mu <- rnorm(5)
   X <- MASS::mvrnorm(1000, mu, S)
   X_na <- X
@@ -567,7 +586,8 @@ if (require("MASS")) {
   iso <- isolation.forest(X_na,
       build_imputer = TRUE,
       prob_pick_pooled_gain = 1,
-      ntry = 10)
+      ntry = 10,
+      nthreads = 1)
   X_imputed <- predict(iso, X_na, type = "impute")
   cat(sprintf("MSE for imputed values w/model: \%f\n",
       mean((X[values_NA] - X_imputed[values_NA])^2)))
