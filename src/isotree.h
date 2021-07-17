@@ -47,10 +47,10 @@
 #define ISOTREE_H
 
 /* Standard headers */
-#include <stddef.h>
-#include <math.h>
-#include <limits.h>
-#include <string.h>
+#include <cstddef>
+#include <cmath>
+#include <climits>
+#include <cstring>
 #include <vector>
 #include <iterator>
 #include <numeric>
@@ -61,9 +61,14 @@
 #include <memory>
 #include <utility>
 #include <cstdint>
+#include <exception>
+#include <stdexcept>
+#include <cassert>
 #include <iostream>
 #ifndef _FOR_R
-    #include <stdio.h> 
+    #include <cstdio>
+    using std::printf;
+    using std::fprintf;
 #else
     extern "C" {
         #include <R_ext/Print.h>
@@ -84,9 +89,16 @@
 #ifdef _FOR_R
     #include <Rcpp.h>
 #endif
-#include <signal.h>
+#include <csignal>
 typedef void (*sig_t_)(int);
+using std::signal;
+using std::raise;
 
+using std::size_t;
+using std::memset;
+using std::memcpy;
+
+#define unexpected_error() throw std::runtime_error("Unexpected error. Please open an issue in GitHub.\n")
 
 /* By default, will use Mersenne-Twister for RNG, but can be switched to something faster */
 #ifdef _USE_MERSENNE_TWISTER
@@ -121,12 +133,8 @@ typedef void (*sig_t_)(int);
 #define square(x) ((x) * (x))
 /* https://stackoverflow.com/questions/2249731/how-do-i-get-bit-by-bit-data-from-an-integer-value-in-c */
 #define extract_bit(number, bit) (((number) >> (bit)) & 1)
-#ifndef isinf
-    #define isinf std::isinf
-#endif
-#ifndef isnan
-    #define isnan std::isnan
-#endif
+using std::isinf;
+using std::isnan;
 #define is_na_or_inf(x) (isnan(x) || isinf(x))
 
 
@@ -488,7 +496,7 @@ struct ImputedData {
     ImputedData(InputData &input_data, size_t row)
     {
         initialize_impute_calc(*this, input_data, row);
-    };
+    }
 
 };
 
@@ -541,17 +549,18 @@ struct WorkerMemory {
     size_t               end_NA;
     size_t               split_ix;
     std::unordered_map<size_t, double> weights_map;
-    std::vector<double>  weights_arr;    /* when not ignoring NAs and when using weights as density */
+    std::vector<double>  weights_arr;     /* when not ignoring NAs and when using weights as density */
+    bool                 changed_weights; /* when using 'missing_action'='Divide' or density weights */
     double               xmin;
     double               xmax;
-    size_t               npresent;       /* 'npresent' and 'ncols_tried' are used interchangeable and for unrelated things */
+    size_t               npresent;        /* 'npresent' and 'ncols_tried' are used interchangeable and for unrelated things */
     bool                 unsplittable;
     std::vector<bool>    is_repeated;
     std::vector<char>    categs;
-    size_t               ncols_tried;    /* 'npresent' and 'ncols_tried' are used interchangeable and for unrelated things */
+    size_t               ncols_tried;     /* 'npresent' and 'ncols_tried' are used interchangeable and for unrelated things */
     int                  ncat_tried;
-    std::vector<double>  btree_weights;  /* only when using weights for sampling */
-    ColumnSampler        col_sampler;    /* columns can get eliminated, keep a copy for each thread */
+    std::vector<double>  btree_weights;   /* only when using weights for sampling */
+    ColumnSampler        col_sampler;     /* columns can get eliminated, keep a copy for each thread */
 
     /* for split criterion */
     std::vector<double>  buffer_dbl;
@@ -630,6 +639,7 @@ public:
     size_t  end;
     size_t  sampler_pos;
     size_t  n_dropped;
+    bool    changed_weights;
     bool    full_state;
     std::vector<size_t> ix_arr;
     std::vector<bool>   cols_possible;
@@ -681,7 +691,7 @@ int add_tree(IsoForest *model_outputs, ExtIsoForest *model_outputs_ext,
              double min_gain, MissingAction missing_action,
              CategSplit cat_split_type, NewCategAction new_cat_action,
              UseDepthImp depth_imp, WeighImpRows weigh_imp_rows,
-             bool   all_perm, std::vector<ImputeNode> *impute_nodes, size_t min_imp_obs,
+             bool   all_perm, Imputer *imputer, size_t min_imp_obs,
              uint64_t random_seed);
 template <class InputData, class WorkerMemory>
 void fit_itree(std::vector<IsoTree>    *tree_root,
@@ -759,6 +769,10 @@ void traverse_hplane(std::vector<IsoHPlane>   &hplane,
                      ImputedData             *imputed_data,
                      sparse_ix *restrict      tree_num,
                      size_t                   row);
+template <class real_t, class sparse_ix>
+void batched_csc_predict(PredictionData<real_t, sparse_ix> &prediction_data, int nthreads,
+                         IsoForest *model_outputs, ExtIsoForest *model_outputs_ext,
+                         double output_depths[],   sparse_ix tree_num[]);
 template <class PredictionData, class sparse_ix>
 void traverse_itree_csc(WorkerForPredictCSC   &workspace,
                         std::vector<IsoTree>  &trees,
@@ -974,8 +988,13 @@ void get_range(size_t ix_arr[], size_t st, size_t end, size_t col_num,
                MissingAction missing_action, double &xmin, double &xmax, bool &unsplittable);
 void get_categs(size_t ix_arr[], int x[], size_t st, size_t end, int ncat,
                 MissingAction missing_action, char categs[], size_t &npresent, bool &unsplittable);
+#if !defined(_WIN32) && !defined(_WIN64)
 long double calculate_sum_weights(std::vector<size_t> &ix_arr, size_t st, size_t end, size_t curr_depth,
                                   std::vector<double> &weights_arr, std::unordered_map<size_t, double> &weights_map);
+#else
+     double calculate_sum_weights(std::vector<size_t> &ix_arr, size_t st, size_t end, size_t curr_depth,
+                                  std::vector<double> &weights_arr, std::unordered_map<size_t, double> &weights_map);
+#endif
 extern bool interrupt_switch;
 extern bool signal_is_locked;
 void set_interrup_global_variable(int s);
@@ -1172,7 +1191,8 @@ double eval_guided_crit_weighted(size_t *restrict ix_arr, size_t st, size_t end,
                                  mapping w);
 
 /* merge_models.cpp */
-ISOTREE_EXPORTED void merge_models(IsoForest*     model,      IsoForest*     other,
+ISOTREE_EXPORTED
+void merge_models(IsoForest*     model,      IsoForest*     other,
                   ExtIsoForest*  ext_model,  ExtIsoForest*  ext_other,
                   Imputer*       imputer,    Imputer*       iother);
 
@@ -1218,12 +1238,14 @@ bool has_cereal();
 #endif /* _ENABLE_CEREAL || _FOR_PYTON */
 
 /* sql.cpp */
-ISOTREE_EXPORTED std::vector<std::string> generate_sql(IsoForest *model_outputs, ExtIsoForest *model_outputs_ext,
+ISOTREE_EXPORTED
+std::vector<std::string> generate_sql(IsoForest *model_outputs, ExtIsoForest *model_outputs_ext,
                                       std::vector<std::string> &numeric_colnames, std::vector<std::string> &categ_colnames,
                                       std::vector<std::vector<std::string>> &categ_levels,
                                       bool output_tree_num, bool index1, bool single_tree, size_t tree_num,
                                       int nthreads);
-ISOTREE_EXPORTED std::string generate_sql_with_select_from(IsoForest *model_outputs, ExtIsoForest *model_outputs_ext,
+ISOTREE_EXPORTED
+std::string generate_sql_with_select_from(IsoForest *model_outputs, ExtIsoForest *model_outputs_ext,
                                           std::string &table_from, std::string &select_as,
                                           std::vector<std::string> &numeric_colnames, std::vector<std::string> &categ_colnames,
                                           std::vector<std::vector<std::string>> &categ_levels,

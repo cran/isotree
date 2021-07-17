@@ -121,7 +121,7 @@ void reconstruct_csr_with_categ
     /* Check if the numeric columns go first and in the original order */
     bool num_is_seq = false;
     if (ncols_numeric > 0 && check_indices_are_sorted(cols_numeric, ncols_numeric)) {
-        if (cols_numeric[0] == 0 && cols_numeric[ncols_numeric-1] == ncols_numeric-1)
+        if (cols_numeric[0] == 0 && cols_numeric[ncols_numeric-1] == (size_t_)ncols_numeric-1)
             num_is_seq = true;
     }
 
@@ -131,7 +131,6 @@ void reconstruct_csr_with_categ
     std::unordered_map<size_t, size_t> orig_to_rec_cat;
 
     sparse_ix__ col_orig;
-    sparse_ix__ col_ind;
     sparse_ix__ *restrict col_ptr;
     
     if (num_is_seq)
@@ -157,7 +156,7 @@ void reconstruct_csr_with_categ
 
     for (size_t row = 0; row < nrows; row++)
     {
-        for (size_t col = orig_Xr_indptr[row]; col < orig_Xr_indptr[row+1]; col++)
+        for (auto col = orig_Xr_indptr[row]; col < orig_Xr_indptr[row+1]; col++)
         {
             if (isnan(orig_Xr[col]))
             {

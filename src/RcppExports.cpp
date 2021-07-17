@@ -338,14 +338,14 @@ BEGIN_RCPP
 END_RCPP
 }
 // call_take_cols_by_slice_csr
-Rcpp::List call_take_cols_by_slice_csr(Rcpp::NumericVector Xr_, Rcpp::IntegerVector Xr_ind_, Rcpp::IntegerVector Xr_indptr, size_t ncols_take, bool as_dense);
+Rcpp::List call_take_cols_by_slice_csr(Rcpp::NumericVector Xr_, Rcpp::IntegerVector Xr_ind_, Rcpp::IntegerVector Xr_indptr, int ncols_take, bool as_dense);
 RcppExport SEXP _isotree_call_take_cols_by_slice_csr(SEXP Xr_SEXP, SEXP Xr_ind_SEXP, SEXP Xr_indptrSEXP, SEXP ncols_takeSEXP, SEXP as_denseSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::traits::input_parameter< Rcpp::NumericVector >::type Xr_(Xr_SEXP);
     Rcpp::traits::input_parameter< Rcpp::IntegerVector >::type Xr_ind_(Xr_ind_SEXP);
     Rcpp::traits::input_parameter< Rcpp::IntegerVector >::type Xr_indptr(Xr_indptrSEXP);
-    Rcpp::traits::input_parameter< size_t >::type ncols_take(ncols_takeSEXP);
+    Rcpp::traits::input_parameter< int >::type ncols_take(ncols_takeSEXP);
     Rcpp::traits::input_parameter< bool >::type as_dense(as_denseSEXP);
     rcpp_result_gen = Rcpp::wrap(call_take_cols_by_slice_csr(Xr_, Xr_ind_, Xr_indptr, ncols_take, as_dense));
     return rcpp_result_gen;
@@ -497,6 +497,16 @@ BEGIN_RCPP
     return R_NilValue;
 END_RCPP
 }
+// deepcopy_int
+SEXP deepcopy_int(SEXP x);
+RcppExport SEXP _isotree_deepcopy_int(SEXP xSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::traits::input_parameter< SEXP >::type x(xSEXP);
+    rcpp_result_gen = Rcpp::wrap(deepcopy_int(x));
+    return rcpp_result_gen;
+END_RCPP
+}
 
 static const R_CallMethodDef CallEntries[] = {
     {"_isotree_deserialize_IsoForest", (DL_FUNC) &_isotree_deserialize_IsoForest, 1},
@@ -530,6 +540,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_isotree_get_ntrees", (DL_FUNC) &_isotree_get_ntrees, 2},
     {"_isotree_increment_by1", (DL_FUNC) &_isotree_increment_by1, 1},
     {"_isotree_inplace_add", (DL_FUNC) &_isotree_inplace_add, 2},
+    {"_isotree_deepcopy_int", (DL_FUNC) &_isotree_deepcopy_int, 1},
     {NULL, NULL, 0}
 };
 

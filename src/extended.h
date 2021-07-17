@@ -71,12 +71,8 @@ void split_hplane_recursive(std::vector<IsoHPlane>   &hplanes,
                           model_params.min_imp_obs);
     }
 
-    /* check for potential isolated leafs */
-    if (workspace.end == workspace.st || curr_depth >= model_params.max_depth)
-        goto terminal_statistics;
-
-    /* with 2 observations and no weights, there's only 1 potential or assumed split */
-    if ((workspace.end - workspace.st) == 1 && !workspace.weights_arr.size() && !workspace.weights_map.size())
+    /* check for potential isolated leafs or unique splits */
+    if (workspace.end == workspace.st || (workspace.end - workspace.st) == 1 || curr_depth >= model_params.max_depth)
         goto terminal_statistics;
 
     /* when using weights, the split should stop when the sum of weights is <= 1 */
@@ -134,15 +130,19 @@ void split_hplane_recursive(std::vector<IsoHPlane>   &hplanes,
 
     for (size_t attempt = 0; attempt < workspace.ntry; attempt++)
     {
-        if (input_data.ncols_tot < 1e3)
+        if (input_data.ncols_tot < 1e5 ||
+            ((long double)model_params.ndim / (long double)workspace.col_sampler.get_remaining_cols()) > .25
+            )
         {
             if (!col_is_taken.size())
                 col_is_taken.resize(input_data.ncols_tot, false);
             else
                 col_is_taken.assign(input_data.ncols_tot, false);
         }
-        else
+        else {
             col_is_taken_s.clear();
+            col_is_taken_s.reserve(model_params.ndim);
+        }
         workspace.ntaken = 0;
         workspace.ntried = 0;
         std::fill(workspace.comb_val.begin(),
@@ -179,8 +179,8 @@ void split_hplane_recursive(std::vector<IsoHPlane>   &hplanes,
             {
                 workspace.col_sampler.drop_col(workspace.col_chosen
                                                  +
-                                               (workspace.col_type == Numeric)?
-                                                (size_t)0 : input_data.ncols_numeric);
+                                               ((workspace.col_type == Numeric)?
+                                                 (size_t)0 : input_data.ncols_numeric));
             }
 
             else
@@ -276,6 +276,7 @@ void split_hplane_recursive(std::vector<IsoHPlane>   &hplanes,
     }
 
     col_is_taken.clear();
+    col_is_taken.shrink_to_fit();
     col_is_taken_s.clear();
 
     /* if the best split is not good enough, don't split any further */
@@ -328,6 +329,12 @@ void split_hplane_recursive(std::vector<IsoHPlane>   &hplanes,
                                     (model_params.cat_split_type == SubSet)? hplanes.back().fill_new[col] : workspace.this_split_point, /* second case is not used */
                                     NULL, NULL, model_params.new_cat_action, model_params.missing_action,
                                     model_params.cat_split_type, false);
+                    break;
+                }
+
+                default:
+                {
+                    unexpected_error();
                     break;
                 }
             }
@@ -642,7 +649,7 @@ void add_chosen_column(WorkerMemory &workspace, InputData &input_data, ModelPara
                         std::copy(workspace.ext_cat_coef[workspace.ntaken].begin(),
                                   workspace.ext_cat_coef[workspace.ntaken].begin() + ncat,
                                   workspace.buffer_dbl.begin());
-                        for (size_t ix = 0; ix < ncat; ix++)
+                        for (int ix = 0; ix < ncat; ix++)
                             workspace.ext_cat_coef[workspace.ntaken][ix] = workspace.buffer_dbl[sorted_ix[ix]];
                     }
 
@@ -684,6 +691,12 @@ void add_chosen_column(WorkerMemory &workspace, InputData &input_data, ModelPara
                     break;
                 }
             }
+            break;
+        }
+
+        default:
+        {
+            unexpected_error();
             break;
         }
     }
@@ -761,6 +774,12 @@ void simplify_hplane(IsoHPlane &hplane, WorkerMemory &workspace, InputData &inpu
                         }
                     }
                     ncols_categ++;
+                    break;
+                }
+
+                default:
+                {
+                    unexpected_error();
                     break;
                 }
             }

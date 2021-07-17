@@ -85,6 +85,7 @@
 * - Xc_ind[nnz]
 *       Pointer to row indices to which each non-zero entry in 'Xc' corresponds.
 *       Must be in sorted order, otherwise results will be incorrect.
+*       The largest value here should be smaller than the largest possible value of 'size_t'.
 *       Pass NULL if there are no sparse numeric columns.
 * - Xc_indptr[ncols_numeric + 1]
 *       Pointer to column index pointers that tell at entry [col] where does column 'col'
@@ -449,47 +450,66 @@ int fit_iforest(IsoForest *model_outputs, ExtIsoForest *model_outputs_ext,
     /* Global variable that determines if the procedure receives a stop signal */
     SignalSwitcher ss = SignalSwitcher();
 
+    /* For exception handling */
+    bool threw_exception = false;
+    std::exception_ptr ex = NULL;
+
     /* grow trees */
-    #pragma omp parallel for num_threads(nthreads) schedule(dynamic) shared(model_outputs, model_outputs_ext, worker_memory, input_data, model_params)
-    for (size_t_for tree = 0; tree < ntrees; tree++)
+    #pragma omp parallel for num_threads(nthreads) schedule(dynamic) shared(model_outputs, model_outputs_ext, worker_memory, input_data, model_params, threw_exception)
+    for (size_t_for tree = 0; tree < (decltype(tree))ntrees; tree++)
     {
-        if (interrupt_switch)
+        if (interrupt_switch || threw_exception)
             continue; /* Cannot break with OpenMP==2.0 (MSVC) */
 
-        if (
-            model_params.impute_at_fit &&
-            input_data.n_missing &&
-            !worker_memory[omp_get_thread_num()].impute_vec.size() &&
-            !worker_memory[omp_get_thread_num()].impute_map.size()
-            )
+        try
         {
-            #ifdef _OPENMP
-            if (nthreads > 1)
+            if (
+                model_params.impute_at_fit &&
+                input_data.n_missing &&
+                !worker_memory[omp_get_thread_num()].impute_vec.size() &&
+                !worker_memory[omp_get_thread_num()].impute_map.size()
+                )
             {
-                worker_memory[omp_get_thread_num()].impute_vec = impute_vec;
-                worker_memory[omp_get_thread_num()].impute_map = impute_map;
+                #ifdef _OPENMP
+                if (nthreads > 1)
+                {
+                    worker_memory[omp_get_thread_num()].impute_vec = impute_vec;
+                    worker_memory[omp_get_thread_num()].impute_map = impute_map;
+                }
+
+                else
+                #endif
+                {
+                    worker_memory[0].impute_vec = std::move(impute_vec);
+                    worker_memory[0].impute_map = std::move(impute_map);
+                }
             }
 
+            fit_itree((model_outputs != NULL)? &model_outputs->trees[tree] : NULL,
+                      (model_outputs_ext != NULL)? &model_outputs_ext->hplanes[tree] : NULL,
+                      worker_memory[omp_get_thread_num()],
+                      input_data,
+                      model_params,
+                      (imputer != NULL)? &(imputer->imputer_tree[tree]) : NULL,
+                      tree);
+
+            if ((model_outputs != NULL))
+                model_outputs->trees[tree].shrink_to_fit();
             else
-            #endif
-            {
-                worker_memory[0].impute_vec = std::move(impute_vec);
-                worker_memory[0].impute_map = std::move(impute_map);
-            }
+                model_outputs_ext->hplanes[tree].shrink_to_fit();
         }
 
-        fit_itree((model_outputs != NULL)? &model_outputs->trees[tree] : NULL,
-                  (model_outputs_ext != NULL)? &model_outputs_ext->hplanes[tree] : NULL,
-                  worker_memory[omp_get_thread_num()],
-                  input_data,
-                  model_params,
-                  (imputer != NULL)? &(imputer->imputer_tree[tree]) : NULL,
-                  tree);
-
-        if ((model_outputs != NULL))
-            model_outputs->trees[tree].shrink_to_fit();
-        else
-            model_outputs_ext->hplanes[tree].shrink_to_fit();
+        catch(...)
+        {
+            #pragma omp critical
+            {
+                if (!threw_exception)
+                {
+                    threw_exception = true;
+                    ex = std::current_exception();
+                }
+            }
+        }
     }
 
     /* check if the procedure got interrupted */
@@ -497,6 +517,10 @@ int fit_iforest(IsoForest *model_outputs, ExtIsoForest *model_outputs_ext,
     #if defined(DONT_THROW_ON_INTERRUPT)
     if (interrupt_switch) return EXIT_FAILURE;
     #endif
+
+    /* check if some exception was thrown */
+    if (threw_exception)
+        std::rethrow_exception(ex);
 
     if ((model_outputs != NULL))
         model_outputs->trees.shrink_to_fit();
@@ -529,7 +553,7 @@ int fit_iforest(IsoForest *model_outputs, ExtIsoForest *model_outputs_ext,
                 if (w.row_depths.size())
                 {
                     #pragma omp parallel for schedule(static) num_threads(nthreads) shared(input_data, output_depths, w, worker_memory)
-                    for (size_t_for row = 0; row < input_data.nrows; row++)
+                    for (size_t_for row = 0; row < (decltype(row))input_data.nrows; row++)
                         output_depths[row] += w.row_depths[row];
                 }
             }
@@ -544,14 +568,14 @@ int fit_iforest(IsoForest *model_outputs, ExtIsoForest *model_outputs_ext,
         {
             double depth_divisor = (double)ntrees * ((model_outputs != NULL)?
                                                      model_outputs->exp_avg_depth : model_outputs_ext->exp_avg_depth);
-            for (size_t_for row = 0; row < nrows; row++)
+            for (size_t row = 0; row < nrows; row++)
                 output_depths[row] = std::exp2( - output_depths[row] / depth_divisor );
         }
 
         else
         {
             double ntrees_dbl = (double) ntrees;
-            for (size_t_for row = 0; row < nrows; row++)
+            for (size_t row = 0; row < nrows; row++)
                 output_depths[row] /= ntrees_dbl;
         }
     }
@@ -717,10 +741,10 @@ int fit_iforest(IsoForest *model_outputs, ExtIsoForest *model_outputs_ext,
 * - coef_by_prop
 *       Same parameter as for 'fit_iforest' (see the documentation in there for details). Can be changed from
 *       what was originally passed to 'fit_iforest'.
-* - impute_nodes
-*       Pointer to already-allocated imputation nodes for the tree that will be built. Note that the number of
-*       entries in the imputation object must match the number of fitted trees when it is used.  Pass
-*       NULL if no imputation node is required.
+* - imputer
+*       Pointer to already-allocated imputer object, as it was output from function 'fit_model' while
+*       producing either 'model_outputs' or 'model_outputs_ext'.
+*       Pass NULL if the model was built without imputer.
 * - min_imp_obs
 *       Same parameter as for 'fit_iforest' (see the documentation in there for details). Can be changed from
 *       what was originally passed to 'fit_iforest'.
@@ -742,7 +766,7 @@ int add_tree(IsoForest *model_outputs, ExtIsoForest *model_outputs_ext,
              double min_gain, MissingAction missing_action,
              CategSplit cat_split_type, NewCategAction new_cat_action,
              UseDepthImp depth_imp, WeighImpRows weigh_imp_rows,
-             bool   all_perm, std::vector<ImputeNode> *impute_nodes, size_t min_imp_obs,
+             bool   all_perm, Imputer *imputer, size_t min_imp_obs,
              uint64_t random_seed)
 {
     if (prob_pick_by_gain_avg < 0 || prob_split_by_gain_avg < 0 ||
@@ -750,6 +774,8 @@ int add_tree(IsoForest *model_outputs, ExtIsoForest *model_outputs_ext,
         throw std::runtime_error("Cannot pass negative probabilities.\n");
     if (ndim == 0 && model_outputs == NULL)
         throw std::runtime_error("Must pass 'ndim>0' in the extended model.\n");
+
+    std::vector<ImputeNode> *impute_nodes = NULL;
 
     int max_categ = 0;
     for (size_t col = 0; col < ncols_categ; col++)
@@ -771,33 +797,66 @@ int add_tree(IsoForest *model_outputs, ExtIsoForest *model_outputs_ext,
                                 (model_outputs != NULL)? 0 : ndim, (model_outputs != NULL)? 0 : ntry,
                                 coef_type, coef_by_prop, false, false, false, depth_imp, weigh_imp_rows, min_imp_obs};
 
-    std::unique_ptr<WorkerMemory<ImputedData<sparse_ix>>> workspace = std::unique_ptr<WorkerMemory<ImputedData<sparse_ix>>>(new WorkerMemory<ImputedData<sparse_ix>>);
+    std::unique_ptr<WorkerMemory<ImputedData<sparse_ix>>> workspace(new WorkerMemory<ImputedData<sparse_ix>>());
 
     size_t last_tree;
-    if (model_outputs != NULL)
+    bool added_tree = false;
+    try
     {
-        last_tree = model_outputs->trees.size();
-        model_outputs->trees.emplace_back();
+        if (model_outputs != NULL)
+        {
+            last_tree = model_outputs->trees.size();
+            model_outputs->trees.emplace_back();
+            added_tree = true;
+        }
+
+        else
+        {
+            last_tree = model_outputs_ext->hplanes.size();
+            model_outputs_ext->hplanes.emplace_back();
+            added_tree = true;
+        }
+
+        if (imputer != NULL)
+        {
+            imputer->imputer_tree.emplace_back();
+            impute_nodes = &(imputer->imputer_tree.back());
+        }
+
+        fit_itree((model_outputs != NULL)? &model_outputs->trees.back() : NULL,
+                  (model_outputs_ext != NULL)? &model_outputs_ext->hplanes.back() : NULL,
+                  *workspace,
+                  input_data,
+                  model_params,
+                  impute_nodes,
+                  last_tree);
+
+        if (model_outputs != NULL)
+            model_outputs->trees.back().shrink_to_fit();
+        else
+            model_outputs_ext->hplanes.back().shrink_to_fit();
+
+        if (imputer != NULL)
+            imputer->imputer_tree.back().shrink_to_fit();
     }
 
-    else
+    catch(...)
     {
-        last_tree = model_outputs_ext->hplanes.size();
-        model_outputs_ext->hplanes.emplace_back();
+        if (added_tree)
+        {
+            if (model_outputs != NULL)
+                model_outputs->trees.pop_back();
+            else
+                model_outputs_ext->hplanes.pop_back();
+            if (imputer != NULL) {
+                if (model_outputs != NULL)
+                    imputer->imputer_tree.resize(model_outputs->trees.size());
+                else
+                    imputer->imputer_tree.resize(model_outputs_ext->hplanes.size());
+            }
+        }
+        throw;
     }
-
-    fit_itree((model_outputs != NULL)? &model_outputs->trees.back() : NULL,
-              (model_outputs_ext != NULL)? &model_outputs_ext->hplanes.back() : NULL,
-              *workspace,
-              input_data,
-              model_params,
-              impute_nodes,
-              last_tree);
-
-    if ((model_outputs != NULL))
-        model_outputs->trees.back().shrink_to_fit();
-    else
-        model_outputs_ext->hplanes.back().shrink_to_fit();
 
     return EXIT_SUCCESS;
 }
@@ -923,19 +982,29 @@ void fit_itree(std::vector<IsoTree>    *tree_root,
 
     }
 
-    /* if it contains missing values, also have to set an array of weights,
-       which will be modified during iterations when there are NAs.
-       If there are already density weights, need to standardize them to sum up to
-       the sample size here */
-    long double weight_scaling = 0;
-    if (model_params.missing_action == Divide || (input_data.sample_weights != NULL && !input_data.weight_as_sample))
-    {
-        workspace.weights_map.clear();
+    /* If there are density weights, need to standardize them to sum up to
+       the sample size here. Note that weights for missing values with 'Divide'
+       are only initialized on-demand later on. */
+    workspace.changed_weights = false;
+    if (hplane_root == NULL) workspace.weights_map.clear();
 
-        /* if the sub-sample size is small relative to the full sample size, use a mapping */
-        if (model_params.sample_size < input_data.nrows / 4)
+    long double weight_scaling = 0;
+    if (input_data.sample_weights != NULL && !input_data.weight_as_sample)
+    {
+        workspace.changed_weights = true;
+
+        /* For the extended model, if there is no sub-sampling, these weights will remain
+           constant throughout and do not need to be re-generated. */
+        if (!(  hplane_root != NULL &&
+                (workspace.weights_map.size() || workspace.weights_arr.size()) &&
+                model_params.sample_size == input_data.nrows
+              )
+            )
         {
-            if (input_data.sample_weights != NULL && !input_data.weight_as_sample)
+            workspace.weights_map.clear();
+
+            /* if the sub-sample size is small relative to the full sample size, use a mapping */
+            if (input_data.Xc_indptr != NULL && model_params.sample_size < input_data.nrows / 20)
             {
                 for (const size_t ix : workspace.ix_arr)
                 {
@@ -945,23 +1014,12 @@ void fit_itree(std::vector<IsoTree>    *tree_root,
                 weight_scaling = (long double)model_params.sample_size / weight_scaling;
                 for (auto &w : workspace.weights_map)
                     w.second *= weight_scaling;
-
             }
 
+            /* if the sub-sample size is large, fill a full array matching to the sample size */
             else
             {
-                for (const size_t ix : workspace.ix_arr)
-                    workspace.weights_map[ix] = 1;
-            }
-
-        }
-
-        /* if the sub-sample size is large, fill a full array matching to the sample size */
-        else
-        {
-            if (!workspace.weights_arr.size())
-            {
-                if (input_data.sample_weights != NULL && !input_data.weight_as_sample)
+                if (!workspace.weights_arr.size())
                 {
                     workspace.weights_arr.assign(input_data.sample_weights, input_data.sample_weights + input_data.nrows);
                     weight_scaling = std::accumulate(workspace.ix_arr.begin(),
@@ -976,15 +1034,6 @@ void fit_itree(std::vector<IsoTree>    *tree_root,
 
                 else
                 {
-                    workspace.weights_arr.resize(input_data.nrows, (double)1);
-                }
-
-            }
-
-            else
-            {
-                if (input_data.sample_weights != NULL && !input_data.weight_as_sample)
-                {
                     for (const size_t ix : workspace.ix_arr)
                     {
                         weight_scaling += input_data.sample_weights[ix];
@@ -993,14 +1042,6 @@ void fit_itree(std::vector<IsoTree>    *tree_root,
                     weight_scaling = (long double)model_params.sample_size / weight_scaling;
                     for (double &w : workspace.weights_arr)
                         w *= weight_scaling;
-
-                }
-
-                else
-                {
-                    /* Note: while not all of them need to be overwritten, this is faster
-                       (sub-sample size was already determined to be at least 1/4 of the sample size) */
-                    std::fill(workspace.weights_arr.begin(), workspace.weights_arr.end(), (double)1);
                 }
             }
         }

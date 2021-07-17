@@ -588,6 +588,7 @@ void sample_random_rows(std::vector<size_t> &ix_arr, size_t nrows, bool with_rep
             {
 
                 std::unordered_set<size_t> repeated_set;
+                repeated_set.reserve(ntake);
                 for (size_t rnd_ix = nrows - ntake; rnd_ix < nrows; rnd_ix++)
                 {
                     candidate = std::uniform_int_distribution<size_t>(0, rnd_ix)(rnd_generator);
@@ -1106,7 +1107,7 @@ void divide_subset_split(size_t ix_arr[], size_t st, size_t end, size_t col_num,
                     break;
                 }
 
-                if (Xc_ind[curr_pos] == *row)
+                if (Xc_ind[curr_pos] == (sparse_ix)(*row))
                 {
                     if (Xc[curr_pos] <= split_point)
                     {
@@ -1131,9 +1132,9 @@ void divide_subset_split(size_t ix_arr[], size_t st, size_t end, size_t col_num,
 
                 else
                 {
-                    if (Xc_ind[curr_pos] > *row)
+                    if (Xc_ind[curr_pos] > (sparse_ix)(*row))
                     {
-                        while (row <= ix_arr + end && Xc_ind[curr_pos] > *row)
+                        while (row <= ix_arr + end && Xc_ind[curr_pos] > (sparse_ix)(*row))
                         {
                             temp       = ix_arr[st];
                             ix_arr[st] = *row;
@@ -1154,7 +1155,7 @@ void divide_subset_split(size_t ix_arr[], size_t st, size_t end, size_t col_num,
                  row != ix_arr + end + 1 && curr_pos != end_col + 1 && ind_end_col >= *row;
                 )
             {
-                if (Xc_ind[curr_pos] == *row)
+                if (Xc_ind[curr_pos] == (sparse_ix)(*row))
                 {
                     if (Xc[curr_pos] <= split_point)
                     {
@@ -1169,7 +1170,7 @@ void divide_subset_split(size_t ix_arr[], size_t st, size_t end, size_t col_num,
 
                 else
                 {
-                    if (Xc_ind[curr_pos] > *row)
+                    if (Xc_ind[curr_pos] > (sparse_ix)(*row))
                         row = std::lower_bound(row + 1, ix_arr + end + 1, Xc_ind[curr_pos]);
                     else
                         curr_pos = std::lower_bound(Xc_ind + curr_pos + 1, Xc_ind + end_col + 1, *row) - Xc_ind;
@@ -1202,7 +1203,7 @@ void divide_subset_split(size_t ix_arr[], size_t st, size_t end, size_t col_num,
                     break;
                 }
 
-                if (Xc_ind[curr_pos] == *row)
+                if (Xc_ind[curr_pos] == (sparse_ix)(*row))
                 {
                     if (isnan(Xc[curr_pos]))
                         has_NAs = true;
@@ -1227,9 +1228,9 @@ void divide_subset_split(size_t ix_arr[], size_t st, size_t end, size_t col_num,
 
                 else
                 {
-                    if (Xc_ind[curr_pos] > *row)
+                    if (Xc_ind[curr_pos] > (sparse_ix)(*row))
                     {
-                        while (row <= ix_arr + end && Xc_ind[curr_pos] > *row)
+                        while (row <= ix_arr + end && Xc_ind[curr_pos] > (sparse_ix)(*row))
                         {
                             temp       = ix_arr[st];
                             ix_arr[st] = *row;
@@ -1252,7 +1253,7 @@ void divide_subset_split(size_t ix_arr[], size_t st, size_t end, size_t col_num,
                  row != ix_arr + end + 1 && curr_pos != end_col + 1 && ind_end_col >= *row;
                 )
             {
-                if (Xc_ind[curr_pos] == *row)
+                if (Xc_ind[curr_pos] == (sparse_ix)(*row))
                 {
                     if (isnan(Xc[curr_pos])) has_NAs = true;
                     if (!isnan(Xc[curr_pos]) && Xc[curr_pos] <= split_point)
@@ -1268,7 +1269,7 @@ void divide_subset_split(size_t ix_arr[], size_t st, size_t end, size_t col_num,
 
                 else
                 {
-                    if (Xc_ind[curr_pos] > *row)
+                    if (Xc_ind[curr_pos] > (sparse_ix)(*row))
                         row = std::lower_bound(row + 1, ix_arr + end + 1, Xc_ind[curr_pos]);
                     else
                         curr_pos = std::lower_bound(Xc_ind + curr_pos + 1, Xc_ind + end_col + 1, *row) - Xc_ind;
@@ -1286,7 +1287,7 @@ void divide_subset_split(size_t ix_arr[], size_t st, size_t end, size_t col_num,
                  row != ix_arr + end + 1 && curr_pos != end_col + 1 && ind_end_col >= *row;
                 )
             {
-                if (Xc_ind[curr_pos] == *row)
+                if (Xc_ind[curr_pos] == (sparse_ix)(*row))
                 {
                     if (isnan(Xc[curr_pos]))
                     {
@@ -1301,7 +1302,7 @@ void divide_subset_split(size_t ix_arr[], size_t st, size_t end, size_t col_num,
 
                 else
                 {
-                    if (Xc_ind[curr_pos] > *row)
+                    if (Xc_ind[curr_pos] > (sparse_ix)(*row))
                         row = std::lower_bound(row + 1, ix_arr + end + 1, Xc_ind[curr_pos]);
                     else
                         curr_pos = std::lower_bound(Xc_ind + curr_pos + 1, Xc_ind + end_col + 1, *row) - Xc_ind;
@@ -1653,8 +1654,8 @@ void get_range(size_t ix_arr[], size_t st, size_t end, size_t col_num,
     size_t curr_pos = st_col;
 
     if (!nnz_col || 
-        Xc_ind[st_col] > ix_arr[end] || 
-        ix_arr[st]     > Xc_ind[end_col]
+        Xc_ind[st_col]         >   (sparse_ix)ix_arr[end] || 
+        (sparse_ix)ix_arr[st]  >   Xc_ind[end_col]
         )
     {
         unsplittable = true;
@@ -1662,8 +1663,8 @@ void get_range(size_t ix_arr[], size_t st, size_t end, size_t col_num,
     }
 
     if (nnz_col < end - st + 1 ||
-        Xc_ind[st_col]  > ix_arr[st] ||
-        Xc_ind[end_col] < ix_arr[end]
+        Xc_ind[st_col]  > (sparse_ix)ix_arr[st] ||
+        Xc_ind[end_col] < (sparse_ix)ix_arr[end]
         )
     {
         xmin = 0;
@@ -1679,7 +1680,7 @@ void get_range(size_t ix_arr[], size_t st, size_t end, size_t col_num,
              row != ix_arr + end + 1 && curr_pos != end_col + 1 && ind_end_col >= *row;
             )
         {
-            if (Xc_ind[curr_pos] == *row)
+            if (Xc_ind[curr_pos] == (sparse_ix)(*row))
             {
                 nmatches++;
                 xmin = (Xc[curr_pos] < xmin)? Xc[curr_pos] : xmin;
@@ -1690,7 +1691,7 @@ void get_range(size_t ix_arr[], size_t st, size_t end, size_t col_num,
 
             else
             {
-                if (Xc_ind[curr_pos] > *row)
+                if (Xc_ind[curr_pos] > (sparse_ix)(*row))
                     row = std::lower_bound(row + 1, ix_arr + end + 1, Xc_ind[curr_pos]);
                 else
                     curr_pos = std::lower_bound(Xc_ind + curr_pos + 1, Xc_ind + end_col + 1, *row) - Xc_ind;
@@ -1704,7 +1705,7 @@ void get_range(size_t ix_arr[], size_t st, size_t end, size_t col_num,
              row != ix_arr + end + 1 && curr_pos != end_col + 1 && ind_end_col >= *row;
             )
         {
-            if (Xc_ind[curr_pos] == *row)
+            if (Xc_ind[curr_pos] == (sparse_ix)(*row))
             {
                 nmatches++;
                 xmin = std::fmin(xmin, Xc[curr_pos]);
@@ -1715,7 +1716,7 @@ void get_range(size_t ix_arr[], size_t st, size_t end, size_t col_num,
 
             else
             {
-                if (Xc_ind[curr_pos] > *row)
+                if (Xc_ind[curr_pos] > (sparse_ix)(*row))
                     row = std::lower_bound(row + 1, ix_arr + end + 1, Xc_ind[curr_pos]);
                 else
                     curr_pos = std::lower_bound(Xc_ind + curr_pos + 1, Xc_ind + end_col + 1, *row) - Xc_ind;
@@ -1752,6 +1753,7 @@ void get_categs(size_t ix_arr[], int x[], size_t st, size_t end, int ncat,
     unsplittable = npresent < 2;
 }
 
+#if !defined(_WIN32) && !defined(_WIN64)
 long double calculate_sum_weights(std::vector<size_t> &ix_arr, size_t st, size_t end, size_t curr_depth,
                                   std::vector<double> &weights_arr, std::unordered_map<size_t, double> &weights_map)
 {
@@ -1768,6 +1770,24 @@ long double calculate_sum_weights(std::vector<size_t> &ix_arr, size_t st, size_t
     else
         return -HUGE_VAL;
 }
+#else
+     double calculate_sum_weights(std::vector<size_t> &ix_arr, size_t st, size_t end, size_t curr_depth,
+                                  std::vector<double> &weights_arr, std::unordered_map<size_t, double> &weights_map)
+{
+    if (curr_depth > 0 && weights_arr.size())
+        return std::accumulate(ix_arr.begin() + st,
+                               ix_arr.begin() + end + 1,
+                               (double)0,
+                               [&weights_arr](const double a, const size_t ix){return a + weights_arr[ix];});
+    else if (curr_depth > 0 && weights_map.size())
+        return std::accumulate(ix_arr.begin() + st,
+                               ix_arr.begin() + end + 1,
+                               (double)0,
+                               [&weights_map](const double a, const size_t ix){return a + weights_map[ix];});
+    else
+        return -HUGE_VAL;
+}
+#endif
 
 template <class real_t>
 size_t move_NAs_to_front(size_t ix_arr[], size_t st, size_t end, real_t x[])
@@ -1881,7 +1901,7 @@ void todense(size_t ix_arr[], size_t st, size_t end,
          row != ix_arr + end + 1 && curr_pos != end_col + 1 && ind_end_col >= *row;
         )
     {
-        if (Xc_ind[curr_pos] == *row)
+        if (Xc_ind[curr_pos] == (sparse_ix)(*row))
         {
             buffer_arr[row - (ix_arr + st)] = Xc[curr_pos];
             if (row == ix_arr + end || curr_pos == end_col) break;
@@ -1890,7 +1910,7 @@ void todense(size_t ix_arr[], size_t st, size_t end,
 
         else
         {
-            if (Xc_ind[curr_pos] > *row)
+            if (Xc_ind[curr_pos] > (sparse_ix)(*row))
                 row = std::lower_bound(row + 1, ix_arr + end + 1, Xc_ind[curr_pos]);
             else
                 curr_pos = std::lower_bound(Xc_ind + curr_pos + 1, Xc_ind + end_col + 1, *row) - Xc_ind;
@@ -1921,7 +1941,7 @@ void check_interrupt_switch(SignalSwitcher &ss)
         #ifdef _FOR_R
         Rcpp::checkUserInterrupt();
         #elif !defined(DONT_THROW_ON_INTERRUPT)
-        throw "Error: procedure was interrupted.\n";
+        throw std::runtime_error("Error: procedure was interrupted.\n");
         #endif
     }
 }

@@ -178,7 +178,7 @@ double calc_kurtosis(size_t ix_arr[], size_t st, size_t end, size_t col_num,
              row != ix_arr + end + 1 && curr_pos != end_col + 1 && ind_end_col >= *row;
             )
         {
-            if (Xc_ind[curr_pos] == *row)
+            if (Xc_ind[curr_pos] == (sparse_ix)(*row))
             {
                 if (is_na_or_inf(Xc[curr_pos]))
                 {
@@ -199,7 +199,7 @@ double calc_kurtosis(size_t ix_arr[], size_t st, size_t end, size_t col_num,
 
             else
             {
-                if (Xc_ind[curr_pos] > *row)
+                if (Xc_ind[curr_pos] > (sparse_ix)(*row))
                     row = std::lower_bound(row + 1, ix_arr + end + 1, Xc_ind[curr_pos]);
                 else
                     curr_pos = std::lower_bound(Xc_ind + curr_pos + 1, Xc_ind + end_col + 1, *row) - Xc_ind;
@@ -213,7 +213,7 @@ double calc_kurtosis(size_t ix_arr[], size_t st, size_t end, size_t col_num,
              row != ix_arr + end + 1 && curr_pos != end_col + 1 && ind_end_col >= *row;
             )
         {
-            if (Xc_ind[curr_pos] == *row)
+            if (Xc_ind[curr_pos] == (sparse_ix)(*row))
             {
                 s1 += pw1(Xc[curr_pos]);
                 s2 += pw2(Xc[curr_pos]);
@@ -226,7 +226,7 @@ double calc_kurtosis(size_t ix_arr[], size_t st, size_t end, size_t col_num,
 
             else
             {
-                if (Xc_ind[curr_pos] > *row)
+                if (Xc_ind[curr_pos] > (sparse_ix)(*row))
                     row = std::lower_bound(row + 1, ix_arr + end + 1, Xc_ind[curr_pos]);
                 else
                     curr_pos = std::lower_bound(Xc_ind + curr_pos + 1, Xc_ind + end_col + 1, *row) - Xc_ind;
@@ -276,7 +276,7 @@ double calc_kurtosis_weighted(size_t ix_arr[], size_t st, size_t end, size_t col
              row != ix_arr + end + 1 && curr_pos != end_col + 1 && ind_end_col >= *row;
             )
         {
-            if (Xc_ind[curr_pos] == *row)
+            if (Xc_ind[curr_pos] == (sparse_ix)(*row))
             {
                 w_this = w[*row];
 
@@ -299,7 +299,7 @@ double calc_kurtosis_weighted(size_t ix_arr[], size_t st, size_t end, size_t col
 
             else
             {
-                if (Xc_ind[curr_pos] > *row)
+                if (Xc_ind[curr_pos] > (sparse_ix)(*row))
                     row = std::lower_bound(row + 1, ix_arr + end + 1, Xc_ind[curr_pos]);
                 else
                     curr_pos = std::lower_bound(Xc_ind + curr_pos + 1, Xc_ind + end_col + 1, *row) - Xc_ind;
@@ -313,7 +313,7 @@ double calc_kurtosis_weighted(size_t ix_arr[], size_t st, size_t end, size_t col
              row != ix_arr + end + 1 && curr_pos != end_col + 1 && ind_end_col >= *row;
             )
         {
-            if (Xc_ind[curr_pos] == *row)
+            if (Xc_ind[curr_pos] == (sparse_ix)(*row))
             {
                 w_this = w[*row];
                 
@@ -328,7 +328,7 @@ double calc_kurtosis_weighted(size_t ix_arr[], size_t st, size_t end, size_t col
 
             else
             {
-                if (Xc_ind[curr_pos] > *row)
+                if (Xc_ind[curr_pos] > (sparse_ix)(*row))
                     row = std::lower_bound(row + 1, ix_arr + end + 1, Xc_ind[curr_pos]);
                 else
                     curr_pos = std::lower_bound(Xc_ind + curr_pos + 1, Xc_ind + end_col + 1, *row) - Xc_ind;
@@ -674,10 +674,6 @@ double categ_gain(number cnt_left, number cnt_right,
 #define sd_gain(sd, sd_left, sd_right) (1. - ((sd_left) + (sd_right)) / (2. * (sd)))
 #define pooled_gain(sd, cnt, sd_left, sd_right, cnt_left, cnt_right) \
     (1. - (1./(sd))*(  ( ((real_t)(cnt_left))/(cnt) )*(sd_left) + ( ((real_t)(cnt_right)/(cnt)) )*(sd_right)  ))
-
-
-/* TODO: these functions would not take into account observation weights if available.
-   Need to create a 'weighted' version of each. */
 
 
 /* TODO: make this a compensated sum */
@@ -1341,6 +1337,12 @@ double eval_guided_crit(size_t *restrict ix_arr, size_t st, size_t end, int *res
                     best_gain = (this_gain > min_gain)? this_gain : best_gain;
                     break;
                 }
+
+                default:
+                {
+                    unexpected_error();
+                    break;
+                }
             }
             break;
         }
@@ -1506,6 +1508,12 @@ double eval_guided_crit(size_t *restrict ix_arr, size_t st, size_t end, int *res
 
                     break;
                 }
+
+                default:
+                {
+                    unexpected_error();
+                    break;
+                }
             }
         }
     }
@@ -1623,6 +1631,12 @@ double eval_guided_crit_weighted(size_t *restrict ix_arr, size_t st, size_t end,
                                         - std::fmax(1., cnt_max) * logl(std::fmax(1., cnt_max))
                                 ) / std::fmax(1., cnt);
                     best_gain = (this_gain > min_gain)? this_gain : best_gain;
+                    break;
+                }
+
+                default:
+                {
+                    unexpected_error();
                     break;
                 }
             }
@@ -1788,6 +1802,12 @@ double eval_guided_crit_weighted(size_t *restrict ix_arr, size_t st, size_t end,
                         }
                     }
 
+                    break;
+                }
+
+                default:
+                {
+                    unexpected_error();
                     break;
                 }
             }

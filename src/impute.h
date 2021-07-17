@@ -142,29 +142,47 @@ void impute_missing_values(real_t numeric_data[], int categ_data[], bool is_col_
         std::vector<ImputedData<sparse_ix>> imp_memory(1);
     #endif
 
+    bool threw_exception = false;
+    std::exception_ptr ex = NULL;
 
     if (model_outputs != NULL)
     {
         #pragma omp parallel for schedule(dynamic) num_threads(nthreads) \
-                shared(end, imp_memory, prediction_data, model_outputs, ix_arr, imputer)
-        for (size_t_for row = 0; row < end; row++)
+                shared(end, imp_memory, prediction_data, model_outputs, ix_arr, imputer, ex)
+        for (size_t_for row = 0; row < (decltype(row))end; row++)
         {
-            initialize_impute_calc(imp_memory[omp_get_thread_num()], prediction_data, imputer, ix_arr[row]);
-
-            for (std::vector<IsoTree> &tree : model_outputs->trees)
+            if (threw_exception) continue;
+            try
             {
-                traverse_itree(tree,
-                               *model_outputs,
-                               prediction_data,
-                               &imputer.imputer_tree[&tree - &(model_outputs->trees[0])],
-                               &imp_memory[omp_get_thread_num()],
-                               (double) 1,
-                               ix_arr[row],
-                               (sparse_ix*)NULL,
-                               (size_t) 0);
+                initialize_impute_calc(imp_memory[omp_get_thread_num()], prediction_data, imputer, ix_arr[row]);
+
+                for (std::vector<IsoTree> &tree : model_outputs->trees)
+                {
+                    traverse_itree(tree,
+                                   *model_outputs,
+                                   prediction_data,
+                                   &imputer.imputer_tree[&tree - &(model_outputs->trees[0])],
+                                   &imp_memory[omp_get_thread_num()],
+                                   (double) 1,
+                                   ix_arr[row],
+                                   (sparse_ix*)NULL,
+                                   (size_t) 0);
+                }
+
+                apply_imputation_results(prediction_data, imp_memory[omp_get_thread_num()], imputer, (size_t) ix_arr[row]);
             }
 
-            apply_imputation_results(prediction_data, imp_memory[omp_get_thread_num()], imputer, (size_t) ix_arr[row]);
+            catch(...)
+            {
+                #pragma omp critical
+                {
+                    if (!threw_exception)
+                    {
+                        threw_exception = true;
+                        ex = std::current_exception();
+                    }
+                }
+            }
 
         }
     }
@@ -173,29 +191,47 @@ void impute_missing_values(real_t numeric_data[], int categ_data[], bool is_col_
     {
         double temp;
         #pragma omp parallel for schedule(dynamic) num_threads(nthreads) \
-                shared(end, imp_memory, prediction_data, model_outputs_ext, ix_arr, imputer) \
+                shared(end, imp_memory, prediction_data, model_outputs_ext, ix_arr, imputer, ex) \
                 private(temp)
-        for (size_t_for row = 0; row < end; row++)
+        for (size_t_for row = 0; row < (decltype(row))end; row++)
         {
-            initialize_impute_calc(imp_memory[omp_get_thread_num()], prediction_data, imputer, ix_arr[row]);
-
-            for (std::vector<IsoHPlane> &hplane : model_outputs_ext->hplanes)
+            if (threw_exception) continue;
+            try
             {
-                traverse_hplane(hplane,
-                                *model_outputs_ext,
-                                prediction_data,
-                                temp,
-                                &imputer.imputer_tree[&hplane - &(model_outputs_ext->hplanes[0])],
-                                &imp_memory[omp_get_thread_num()],
-                                (sparse_ix*)NULL,
-                                ix_arr[row]);
+                initialize_impute_calc(imp_memory[omp_get_thread_num()], prediction_data, imputer, ix_arr[row]);
+
+                for (std::vector<IsoHPlane> &hplane : model_outputs_ext->hplanes)
+                {
+                    traverse_hplane(hplane,
+                                    *model_outputs_ext,
+                                    prediction_data,
+                                    temp,
+                                    &imputer.imputer_tree[&hplane - &(model_outputs_ext->hplanes[0])],
+                                    &imp_memory[omp_get_thread_num()],
+                                    (sparse_ix*)NULL,
+                                    ix_arr[row]);
+                }
+
+                apply_imputation_results(prediction_data, imp_memory[omp_get_thread_num()], imputer, (size_t) ix_arr[row]);
             }
 
-            apply_imputation_results(prediction_data, imp_memory[omp_get_thread_num()], imputer, (size_t) ix_arr[row]);
+            catch(...)
+            {
+                #pragma omp critical
+                {
+                    if (!threw_exception)
+                    {
+                        threw_exception = true;
+                        ex = std::current_exception();
+                    }
+                }
+            }
 
         }
     }
 
+    if (threw_exception)
+        std::rethrow_exception(ex);
 }
 
 template <class InputData>
@@ -222,7 +258,7 @@ void initialize_imputer(Imputer &imputer, InputData &input_data, size_t ntrees, 
     if (input_data.numeric_data != NULL)
     {
         #pragma omp parallel for schedule(static) num_threads(nthreads) private(cnt, offset) shared(input_data, imputer)
-        for (size_t_for col = 0; col < input_data.ncols_numeric; col++)
+        for (size_t_for col = 0; col < (decltype(col))input_data.ncols_numeric; col++)
         {
             cnt    = input_data.nrows;
             offset = col * input_data.nrows;
@@ -239,10 +275,10 @@ void initialize_imputer(Imputer &imputer, InputData &input_data, size_t ntrees, 
     else if (input_data.Xc_indptr != NULL)
     {
         #pragma omp parallel for schedule(dynamic) num_threads(nthreads) private(cnt) shared(input_data, imputer)
-        for (size_t_for col = 0; col < input_data.ncols_numeric; col++)
+        for (size_t_for col = 0; col < (decltype(col))input_data.ncols_numeric; col++)
         {
             cnt = input_data.nrows;
-            for (size_t ix = input_data.Xc_indptr[col]; ix < input_data.Xc_indptr[col + 1]; ix++)
+            for (auto ix = input_data.Xc_indptr[col]; ix < input_data.Xc_indptr[col + 1]; ix++)
             {
                 imputer.col_means[col] += (!is_na_or_inf(input_data.Xc[ix]))?
                                            input_data.Xc[ix] : 0;
@@ -256,7 +292,7 @@ void initialize_imputer(Imputer &imputer, InputData &input_data, size_t ntrees, 
     {
         std::vector<size_t> cat_counts(input_data.max_categ);
         #pragma omp parallel for schedule(static) num_threads(nthreads) firstprivate(cat_counts) private(offset) shared(input_data, imputer)
-        for (size_t_for col = 0; col < input_data.ncols_categ; col++)
+        for (size_t_for col = 0; col < (decltype(col))input_data.ncols_categ; col++)
         {
             std::fill(cat_counts.begin(), cat_counts.end(), 0);
             offset = col * input_data.nrows;
@@ -428,7 +464,7 @@ void build_impute_node(ImputeNode &imputer,    WorkerMemory &workspace,
                  row != ix_arr + workspace.end + 1 && curr_pos != end_col + 1 && ind_end_col >= *row;
                 )
             {
-                if (input_data.Xc_ind[curr_pos] == *row)
+                if (input_data.Xc_ind[curr_pos] == static_cast<typename std::remove_pointer<decltype(input_data.Xc_ind)>::type>(*row))
                 {
                     xnum = input_data.Xc[curr_pos];
                     if (workspace.weights_arr.size())
@@ -454,7 +490,7 @@ void build_impute_node(ImputeNode &imputer,    WorkerMemory &workspace,
 
                 else
                 {
-                    if (input_data.Xc_ind[curr_pos] > *row)
+                    if (input_data.Xc_ind[curr_pos] > static_cast<typename std::remove_pointer<decltype(input_data.Xc_ind)>::type>(*row))
                         row = std::lower_bound(row + 1, ix_arr + workspace.end + 1, input_data.Xc_ind[curr_pos]);
                     else
                         curr_pos = std::lower_bound(input_data.Xc_ind + curr_pos + 1, input_data.Xc_ind + end_col + 1, *row) - input_data.Xc_ind;
@@ -558,7 +594,7 @@ void build_impute_node(ImputeNode &imputer,    WorkerMemory &workspace,
     {
         case Inverse:
         {
-            double wsum_div = wsum * sqrt(wsum);
+            double wsum_div = wsum * std::sqrt(wsum);
             for (double &w : imputer.num_weight)
                 w /= wsum_div;
 
@@ -575,6 +611,8 @@ void build_impute_node(ImputeNode &imputer,    WorkerMemory &workspace,
                 w /= wsum;
             break;
         }
+
+        default: {}
 
         /* TODO: maybe divide by nrows for prop */
     }
@@ -599,6 +637,8 @@ void build_impute_node(ImputeNode &imputer,    WorkerMemory &workspace,
                 w *= curr_depth_dbl;
             break;
         }
+
+        default: {}
     }
 
     /* now re-adjust sums */
@@ -706,7 +746,7 @@ void combine_tree_imputations(WorkerMemory &workspace,
     if (workspace.impute_vec.size())
     {
         #pragma omp parallel for schedule(dynamic) num_threads(nthreads) shared(has_missing, workspace, impute_vec)
-        for (size_t_for row = 0; row < has_missing.size(); row++)
+        for (size_t_for row = 0; row < (decltype(row))has_missing.size(); row++)
             if (has_missing[row])
                 combine_imp_single(workspace.impute_vec[row], impute_vec[row]);
     }
@@ -714,7 +754,7 @@ void combine_tree_imputations(WorkerMemory &workspace,
     else if (workspace.impute_map.size())
     {
         #pragma omp parallel for schedule(dynamic) num_threads(nthreads) shared(has_missing, workspace, impute_map)
-        for (size_t_for row = 0; row < has_missing.size(); row++)
+        for (size_t_for row = 0; row < (decltype(row))has_missing.size(); row++)
             if (has_missing[row])
                 combine_imp_single(workspace.impute_map[row], impute_map[row]);
     }
@@ -850,7 +890,7 @@ void apply_imputation_results(imp_arr    &impute_vec,
     }
 
     #pragma omp parallel for schedule(dynamic) num_threads(nthreads) shared(input_data, impute_vec, imputer) private(col)
-    for (size_t_for row = 0; row < input_data.nrows; row++)
+    for (size_t_for row = 0; row < (decltype(row))input_data.nrows; row++)
     {
         if (input_data.has_missing[row])
         {
@@ -940,7 +980,7 @@ void apply_imputation_results(PredictionData  &prediction_data,
     }
 
     if (prediction_data.Xr != NULL)
-        for (size_t ix = prediction_data.Xr_indptr[row]; ix < prediction_data.Xr_indptr[row + 1]; ix++)
+        for (auto ix = prediction_data.Xr_indptr[row]; ix < prediction_data.Xr_indptr[row + 1]; ix++)
         {
             if (is_na_or_inf(prediction_data.Xr[ix]))
             {
@@ -1021,7 +1061,7 @@ void initialize_impute_calc(ImputedData &imp, InputData &input_data, size_t row)
                                    row);
             if (
                 res != input_data.Xc_ind + input_data.Xc_indptr[col + 1] && 
-                *res == row && 
+                *res == static_cast<typename std::remove_pointer<decltype(res)>::type>(row) && 
                 is_na_or_inf(input_data.Xc[res - input_data.Xc_ind])
                 )
             {
@@ -1089,7 +1129,7 @@ void initialize_impute_calc(ImputedData &imp, PredictionData &prediction_data, I
     {
         if (!imp.missing_sp.size())
             imp.missing_sp.resize(imputer.ncols_numeric);
-        for (size_t ix = prediction_data.Xr_indptr[row]; ix < prediction_data.Xr_indptr[row + 1]; ix++)
+        for (auto ix = prediction_data.Xr_indptr[row]; ix < prediction_data.Xr_indptr[row + 1]; ix++)
             if (is_na_or_inf(prediction_data.Xr[ix]))
                 imp.missing_sp[imp.n_missing_sp++] = prediction_data.Xr_ind[ix];
 
@@ -1159,7 +1199,7 @@ void allocate_imp_vec(std::vector<ImputedData> &impute_vec, InputData &input_dat
 {
     impute_vec.resize(input_data.nrows);
     #pragma omp parallel for schedule(dynamic) num_threads(nthreads) shared(impute_vec, input_data)
-    for (size_t_for row = 0; row < input_data.nrows; row++)
+    for (size_t_for row = 0; row < (decltype(row))input_data.nrows; row++)
         if (input_data.has_missing[row])
             initialize_impute_calc(impute_vec[row], input_data, row);
 }
@@ -1199,7 +1239,7 @@ void check_for_missing(InputData &input_data,
     {
         for (size_t col = 0; col < input_data.ncols_numeric; col++)
             #pragma omp parallel for schedule(static) num_threads(nthreads) shared(col, input_data)
-            for (size_t_for ix = input_data.Xc_indptr[col]; ix < input_data.Xc_indptr[col + 1]; ix++)
+            for (size_t_for ix = input_data.Xc_indptr[col]; ix < (decltype(ix))input_data.Xc_indptr[col + 1]; ix++)
                 if (is_na_or_inf(input_data.Xc[ix]))
                     input_data.has_missing[input_data.Xc_ind[ix]] = true;
             #pragma omp barrier
@@ -1208,7 +1248,7 @@ void check_for_missing(InputData &input_data,
     if (input_data.numeric_data != NULL || input_data.categ_data != NULL)
     {
         #pragma omp parallel for schedule(static) num_threads(nthreads) shared(input_data)
-        for (size_t_for row = 0; row < input_data.nrows; row++)
+        for (size_t_for row = 0; row < (decltype(row))input_data.nrows; row++)
         {
             if (input_data.Xc_indptr == NULL)
             {
@@ -1247,7 +1287,7 @@ size_t check_for_missing(PredictionData  &prediction_data,
     std::vector<char> has_missing(prediction_data.nrows, false);
 
     #pragma omp parallel for schedule(static) num_threads(nthreads) shared(has_missing, prediction_data, imputer)
-    for (size_t_for row = 0; row < prediction_data.nrows; row++)
+    for (size_t_for row = 0; row < (decltype(row))prediction_data.nrows; row++)
     {
         if (prediction_data.numeric_data != NULL)
         {
@@ -1278,7 +1318,7 @@ size_t check_for_missing(PredictionData  &prediction_data,
 
         else if (prediction_data.Xr != NULL)
         {
-            for (size_t ix = prediction_data.Xr_indptr[row]; ix < prediction_data.Xr_indptr[row + 1]; ix++)
+            for (auto ix = prediction_data.Xr_indptr[row]; ix < prediction_data.Xr_indptr[row + 1]; ix++)
             {
                 if (is_na_or_inf(prediction_data.Xr[ix]))
                 {
