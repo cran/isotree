@@ -9,4 +9,4 @@
 #include "isoforest.h"
 #include "mult.h"
 #include "predict.h"
-#include "utils.h" 
+#include "utils.h"
