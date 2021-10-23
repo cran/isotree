@@ -4,21 +4,21 @@
 \alias{isotree.add.tree}
 \title{Add additional (single) tree to isolation forest model}
 \usage{
-isotree.add.tree(model, df, sample_weights = NULL, column_weights = NULL)
+isotree.add.tree(model, data, sample_weights = NULL, column_weights = NULL)
 }
 \arguments{
 \item{model}{An Isolation Forest object as returned by \link{isolation.forest}, to which an additional tree will be added.
 
-This object will be modified in-place.}
+\bold{This object will be modified in-place}.}
 
-\item{df}{A `data.frame`, `data.table`, `tibble`, `matrix`, or sparse matrix (from package `Matrix` or `SparseM`, CSC format)
+\item{data}{A `data.frame`, `data.table`, `tibble`, `matrix`, or sparse matrix (from package `Matrix` or `SparseM`, CSC format)
 to which to fit the new tree.}
 
 \item{sample_weights}{Sample observation weights for each row of 'X', with higher weights indicating
 distribution density (i.e. if the weight is two, it has the same effect of including the same data
 point twice). If not `NULL`, model must have been built with `weights_as_sample_prob` = `FALSE`.}
 
-\item{column_weights}{Sampling weights for each column in `df`. Ignored when picking columns by deterministic criterion.
+\item{column_weights}{Sampling weights for each column in `data`. Ignored when picking columns by deterministic criterion.
 If passing `NULL`, each column will have a uniform weight. Cannot be used when weighting by kurtosis.}
 }
 \value{
@@ -26,9 +26,13 @@ The same `model` object now modified, as invisible.
 }
 \description{
 Adds a single tree fit to the full (non-subsampled) data passed here. Must
-have the same columns as previously-fitted data.
+have the same columns as previously-fitted data. Categorical columns, if any,
+may have new categories.
 }
 \details{
+Be aware that, if an out-of-memory error occurs, the resulting object might be rendered unusable
+(might crash when calling certain functions).
+
 For safety purposes, the model object can be deep copied (including the underlying C++ object)
 through function \link{isotree.deep.copy} before undergoing an in-place modification like this.
 }

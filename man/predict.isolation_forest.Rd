@@ -38,6 +38,8 @@ when the number of trees or rows is large.}
   \item `"tree_num"` for the terminal node number for each tree - if choosing this option,
   will return a list containing both the average isolation depth and the terminal node numbers, under entries
   `avg_depth` and `tree_num`, respectively.
+  \item `"tree_depths"` for the non-standardized isolation depth or expected isolation depth for each tree
+  (note that they will not include range penalties from `penalize_range=TRUE`).
   \item `"impute"` for imputation of missing values in `newdata`.
 }}
 
@@ -60,8 +62,9 @@ The requested prediction type, which can be: \itemize{
 \item A numeric vector with one entry per row in `newdata` (for output types `"score"`, `"avg_depth"`).
 \item A list with entries `avg_depth` (numeric vector)
 and `tree_num` (integer matrix indicating the terminal node number under each tree for each
-observation, with trees as columns), for output type
-`"tree_num"`.
+observation, with trees as columns), for output type `"tree_num"`.
+\item A numeric matrix with rows matching to those in `newdata` and one column per tree in the
+model, for output type `"tree_depths"`.
 \item A numeric square matrix or `dist` object containing a vector with the upper triangular
 part of a square matrix
 (for output types `"dist"`, `"avg_sep"`, with no `refdata`).
@@ -110,6 +113,19 @@ can be small differences between runs due to roundoff error.
 When imputing missing values, the input may contain new columns (i.e. not present when the model was fitted),
 which will be output as-is.
 }
+\section{Model serving considerations}{
+
+If the model was built with `nthreads>1`, this prediction function will
+use OpenMP for parallelization. In a linux setup, one usually has GNU's "gomp" as OpenMP as backend, which
+will hang when used in a forked process - for example, if one tries to call this prediction function from
+`RestRserve`, which uses process forking for parallelization, it will cause the whole application to freeze;
+and if using kubernetes on top of a different backend such as plumber, might cause it to run slower than
+needed or to hang too. A potential fix in these cases is to set the number of threads to 1 in the object
+(e.g. `model$nthreads <- 1L`), or to use a different version of this library compiled without OpenMP
+(requires manually altering the `Makevars` file), or to use a non-GNU OpenMP backend. This should not
+be an issue when using this library normally in e.g. an RStudio session.
+}
+
 \seealso{
 \link{isolation.forest} \link{isotree.restore.handle}
 }

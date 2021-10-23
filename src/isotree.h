@@ -46,9 +46,11 @@
 #ifndef ISOTREE_H
 #define ISOTREE_H
 
+/* This is only used for the serialiation format and might not reflect the
+   actual version of the library, do not use for anything else. */
 #define ISOTREE_VERSION_MAJOR 0
 #define ISOTREE_VERSION_MINOR 3
-#define ISOTREE_VERSION_PATCH 0
+#define ISOTREE_VERSION_PATCH 6
 
 /* For MinGW, needs to be defined before including any headers */
 #if (defined(_WIN32) || defined(_WIN64)) && (SIZE_MAX >= UINT64_MAX)
@@ -186,7 +188,7 @@ using std::isnan;
 
 
 /* Aliasing for compiler optimizations */
-#if defined(__GNUG__) || defined(__GNUC__) || defined(_MSC_VER) || defined(__clang__) || defined(__INTEL_COMPILER)
+#if defined(__GNUG__) || defined(__GNUC__) || defined(_MSC_VER) || defined(__clang__) || defined(__INTEL_COMPILER) || defined(__IBMCPP__) || defined(__ibmxl__) || defined(SUPPORTS_RESTRICT)
     #define restrict __restrict
 #else
     #define restrict 
@@ -226,14 +228,14 @@ using std::isnan;
 #define THRESHOLD_LONG_DOUBLE (size_t)1e6
 
 /* Types used through the package */
-typedef enum  NewCategAction {Weighted=0, Smallest=11, Random=12}      NewCategAction; /* Weighted means Impute in the extended model */
-typedef enum  MissingAction  {Divide=21,   Impute=22,   Fail=0}        MissingAction;  /* Divide is only for non-extended model */
+typedef enum  NewCategAction {Weighted=0,  Smallest=11,    Random=12}  NewCategAction; /* Weighted means Impute in the extended model */
+typedef enum  MissingAction  {Divide=21,   Impute=22,      Fail=0}     MissingAction;  /* Divide is only for non-extended model */
 typedef enum  ColType        {Numeric=31,  Categorical=32, NotUsed=0}  ColType;
-typedef enum  CategSplit     {SubSet=0,   SingleCateg=41}              CategSplit;
-typedef enum  GainCriterion  {Averaged=51, Pooled=52,   NoCrit=0}      Criterion;      /* For guided splits */
+typedef enum  CategSplit     {SubSet=0,    SingleCateg=41}             CategSplit;
+typedef enum  GainCriterion  {Averaged=51, Pooled=52,      NoCrit=0}   Criterion;      /* For guided splits */
 typedef enum  CoefType       {Uniform=61,  Normal=0}                   CoefType;       /* For extended model */
-typedef enum  UseDepthImp    {Lower=71,    Higher=0,   Same=72}        UseDepthImp;    /* For NA imputation */
-typedef enum  WeighImpRows   {Inverse=0,  Prop=81,     Flat=82}        WeighImpRows;   /* For NA imputation */
+typedef enum  UseDepthImp    {Lower=71,    Higher=0,       Same=72}    UseDepthImp;    /* For NA imputation */
+typedef enum  WeighImpRows   {Inverse=0,   Prop=81,        Flat=82}    WeighImpRows;   /* For NA imputation */
 
 /* Notes about new categorical action:
 *  - For single-variable case, if using 'Smallest', can then pass data at prediction time
@@ -296,6 +298,7 @@ typedef struct IsoForest {
     double            exp_avg_depth;
     double            exp_avg_sep;
     size_t            orig_sample_size;
+    bool              has_range_penalty;
 
     IsoForest() = default;
 } IsoForest;
@@ -308,6 +311,7 @@ typedef struct ExtIsoForest {
     double            exp_avg_depth;
     double            exp_avg_sep;
     size_t            orig_sample_size;
+    bool              has_range_penalty;
 
     ExtIsoForest() = default;
 } ExtIsoForest;
@@ -388,6 +392,7 @@ typedef struct {
     size_t    ncols_per_tree;
     size_t    max_depth;
     bool      penalize_range;
+    bool      standardize_data;
     uint64_t  random_seed;
     bool      weigh_by_kurt;
     double    prob_pick_by_gain_avg;
@@ -605,7 +610,7 @@ int fit_iforest(IsoForest *model_outputs, ExtIsoForest *model_outputs_ext,
                 real_t sample_weights[], bool with_replacement, bool weight_as_sample,
                 size_t nrows, size_t sample_size, size_t ntrees,
                 size_t max_depth, size_t ncols_per_tree,
-                bool   limit_depth, bool penalize_range,
+                bool   limit_depth, bool penalize_range, bool standardize_data,
                 bool   standardize_dist, double tmat[],
                 double output_depths[], bool standardize_depth,
                 real_t col_weights[], bool weigh_by_kurt,
@@ -624,7 +629,7 @@ int add_tree(IsoForest *model_outputs, ExtIsoForest *model_outputs_ext,
              size_t ndim, size_t ntry, CoefType coef_type, bool coef_by_prop,
              real_t sample_weights[], size_t nrows,
              size_t max_depth,     size_t ncols_per_tree,
-             bool   limit_depth,   bool penalize_range,
+             bool   limit_depth,   bool penalize_range, bool standardize_data,
              real_t col_weights[], bool weigh_by_kurt,
              double prob_pick_by_gain_avg, double prob_split_by_gain_avg,
              double prob_pick_by_gain_pl,  double prob_split_by_gain_pl,
@@ -675,13 +680,15 @@ void predict_iforest(real_t numeric_data[], int categ_data[],
                      real_t Xr[], sparse_ix Xr_ind[], sparse_ix Xr_indptr[],
                      size_t nrows, int nthreads, bool standardize,
                      IsoForest *model_outputs, ExtIsoForest *model_outputs_ext,
-                     double output_depths[],   sparse_ix tree_num[]);
+                     double output_depths[],   sparse_ix tree_num[],
+                     double per_tree_depths[]);
 template <class PredictionData, class sparse_ix>
 void traverse_itree_no_recurse(std::vector<IsoTree>  &tree,
                                IsoForest             &model_outputs,
                                PredictionData        &prediction_data,
                                double                &output_depth,
                                sparse_ix *restrict   tree_num,
+                               double *restrict      tree_depth,
                                size_t                row);
 template <class PredictionData, class sparse_ix, class ImputedData>
 double traverse_itree(std::vector<IsoTree>     &tree,
@@ -692,6 +699,7 @@ double traverse_itree(std::vector<IsoTree>     &tree,
                       double                   curr_weight,
                       size_t                   row,
                       sparse_ix *restrict      tree_num,
+                      double *restrict         tree_depth,
                       size_t                   curr_lev);
 template <class PredictionData, class sparse_ix>
 void traverse_hplane_fast(std::vector<IsoHPlane>  &hplane,
@@ -699,6 +707,7 @@ void traverse_hplane_fast(std::vector<IsoHPlane>  &hplane,
                           PredictionData          &prediction_data,
                           double                  &output_depth,
                           sparse_ix *restrict     tree_num,
+                          double *restrict        tree_depth,
                           size_t                  row);
 template <class PredictionData, class sparse_ix, class ImputedData>
 void traverse_hplane(std::vector<IsoHPlane>   &hplane,
@@ -708,17 +717,20 @@ void traverse_hplane(std::vector<IsoHPlane>   &hplane,
                      std::vector<ImputeNode> *impute_nodes,
                      ImputedData             *imputed_data,
                      sparse_ix *restrict      tree_num,
+                     double *restrict         tree_depth,
                      size_t                   row);
 template <class real_t, class sparse_ix>
 void batched_csc_predict(PredictionData<real_t, sparse_ix> &prediction_data, int nthreads,
                          IsoForest *model_outputs, ExtIsoForest *model_outputs_ext,
-                         double output_depths[],   sparse_ix tree_num[]);
+                         double output_depths[],   sparse_ix tree_num[],
+                         double per_tree_depths[]);
 template <class PredictionData, class sparse_ix>
 void traverse_itree_csc(WorkerForPredictCSC   &workspace,
                         std::vector<IsoTree>  &trees,
                         IsoForest             &model_outputs,
                         PredictionData        &prediction_data,
                         sparse_ix             *tree_num,
+                        double                *per_tree_depths,
                         size_t                curr_tree,
                         bool                  has_range_penalty);
 template <class PredictionData, class sparse_ix>
@@ -727,6 +739,7 @@ void traverse_hplane_csc(WorkerForPredictCSC      &workspace,
                          ExtIsoForest             &model_outputs,
                          PredictionData           &prediction_data,
                          sparse_ix                *tree_num,
+                         double                   *per_tree_depths,
                          size_t                   curr_tree,
                          bool                     has_range_penalty);
 template <class PredictionData>
@@ -901,6 +914,7 @@ void sample_random_rows(std::vector<size_t> &ix_arr, size_t nrows, bool with_rep
                         size_t log2_n, size_t btree_offset, std::vector<bool> &is_repeated);
 template <class real_t=double>
 void weighted_shuffle(size_t *restrict outp, size_t n, real_t *restrict weights, double *restrict buffer_arr, RNG_engine &rnd_generator);
+double sample_random_uniform(double xmin, double xmax, RNG_engine &rng);
 size_t divide_subset_split(size_t ix_arr[], double x[], size_t st, size_t end, double split_point);
 template <class real_t=double>
 void divide_subset_split(size_t ix_arr[], real_t x[], size_t st, size_t end, double split_point,
@@ -979,17 +993,28 @@ void calc_mean_and_sd_t(size_t ix_arr[], size_t st, size_t end, real_t_ *restric
 template <class real_t_>
 void calc_mean_and_sd(size_t ix_arr[], size_t st, size_t end, real_t_ *restrict x,
                       MissingAction missing_action, double &x_sd, double &x_mean);
+template <class real_t_>
+double calc_mean_only(size_t ix_arr[], size_t st, size_t end, real_t_ *restrict x);
 template <class real_t_, class mapping>
 void calc_mean_and_sd_weighted(size_t ix_arr[], size_t st, size_t end, real_t_ *restrict x, mapping w,
                                MissingAction missing_action, double &x_sd, double &x_mean);
+template <class real_t_, class mapping>
+double calc_mean_only_weighted(size_t ix_arr[], size_t st, size_t end, real_t_ *restrict x, mapping w);
 template <class real_t_, class sparse_ix>
 void calc_mean_and_sd(size_t ix_arr[], size_t st, size_t end, size_t col_num,
                       real_t_ *restrict Xc, sparse_ix Xc_ind[], sparse_ix Xc_indptr[],
                       double &x_sd, double &x_mean);
+template <class real_t_, class sparse_ix>
+double calc_mean_only(size_t ix_arr[], size_t st, size_t end, size_t col_num,
+                      real_t_ *restrict Xc, sparse_ix Xc_ind[], sparse_ix Xc_indptr[]);
 template <class real_t_, class sparse_ix, class mapping>
 void calc_mean_and_sd_weighted(size_t ix_arr[], size_t st, size_t end, size_t col_num,
                                real_t_ *restrict Xc, sparse_ix Xc_ind[], sparse_ix Xc_indptr[],
                                double &x_sd, double &x_mean, mapping w);
+template <class real_t_, class sparse_ix, class mapping>
+double calc_mean_only_weighted(size_t ix_arr[], size_t st, size_t end, size_t col_num,
+                               real_t_ *restrict Xc, sparse_ix Xc_ind[], sparse_ix Xc_indptr[],
+                               mapping w);
 template <class real_t_>
 void add_linear_comb(size_t ix_arr[], size_t st, size_t end, double *restrict res,
                      real_t_ *restrict x, double &coef, double x_sd, double x_mean, double &fill_val,
@@ -1489,6 +1514,11 @@ void deserialize_combined
     Imputer *imputer,
     char *optional_metadata
 );
+bool check_model_has_range_penalty(const IsoForest &model);
+bool check_model_has_range_penalty(const ExtIsoForest &model);
+void add_range_penalty(IsoForest &model);
+void add_range_penalty(ExtIsoForest &model);
+void add_range_penalty(Imputer &model);
 
 /* sql.cpp */
 ISOTREE_EXPORTED

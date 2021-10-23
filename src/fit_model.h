@@ -101,7 +101,7 @@
 *       and for random splits.
 * - coef_type
 *       For the extended model, whether to sample random coefficients according to a normal distribution ~ N(0, 1)
-*       (as proposed in [3]) or according to a uniform distribution ~ Unif(-1, +1) as proposed in [4]. Ignored for the
+*       (as proposed in [4]) or according to a uniform distribution ~ Unif(-1, +1) as proposed in [3]. Ignored for the
 *       single-variable model.
 * - sample_weights[nrows]
 *       Weights for the rows when building a tree, either as sampling importances when using
@@ -130,6 +130,9 @@
 *       author's code in [5] is 10.
 * - max_depth
 *       Maximum depth of the binary trees to grow. Will get overwritten if passing 'limit_depth' = 'true'.
+*       Models that use 'prob_pick_by_gain_pl' or 'prob_pick_by_gain_avg' are likely to benefit from
+*       deeper trees (larger 'max_depth'), but deeper trees can result in much slower model fitting and
+*       predictions.
 * - ncols_per_tree
 *       Number of columns to use (have as potential candidates for splitting at each iteration) in each tree,
 *       similar to the 'mtry' parameter of random forests.
@@ -140,8 +143,9 @@
 *       Whether to automatically set the maximum depth to the corresponding depth of a balanced binary tree with number of
 *       terminal nodes corresponding to the sub-sample size (the reason being that, if trying to detect outliers, an outlier
 *       will only be so if it turns out to be isolated with shorter average depth than usual, which corresponds to a balanced
-*       tree depth). Default setting for [1], [2], [3], [4] is 'true', but it's recommended to pass higher values if
-*       using the model for purposes other than outlier detection.
+*       tree depth). Default setting for [1], [2], [3], [4] is 'true', but it's recommended to pass 'false' here
+*       and higher values for 'max_depth' if using the model for purposes other than outlier detection.
+*       Note that, if passing 'limit_depth=true', then 'max_depth' is ignored.
 * - penalize_range
 *       Whether to penalize (add -1 to the terminal depth) observations at prediction time that have a value
 *       of the chosen split variable (linear combination in extended model) that falls outside of a pre-determined
@@ -149,6 +153,9 @@
 *       as proposed in [4] and implemented in the authors' original code in [5]. Not used in single-variable model
 *       when splitting by categorical variables. Note that this can make a very large difference in the results
 *       when using `prob_pick_pooled_gain`.
+* - standardize_data
+*       Whether to standardize the features at each node before creating a linear combination of them as suggested
+*       in [4]. This is ignored when using 'ndim=1'.
 * - standardize_dist
 *       If passing 'tmat' (see documentation for it), whether to standardize the resulting average separation
 *       depths in order to produce a distance metric or not, in the same way this is done for the outlier score.
@@ -197,6 +204,7 @@
 *       Default setting for [1], [2], [3] is zero, and default for [4] is 1. This is the randomization parameter that can
 *       be passed to the author's original code in [5]. Note that, if passing value 1 (100%) with no sub-sampling and using the
 *       single-variable model, every single tree will have the exact same splits.
+*       Under this option, models are likely to produce better results when increasing 'max_depth'.
 *       Important detail: if using either 'prob_pick_avg_gain' or 'prob_pick_pooled_gain', the distribution of
 *       outlier scores is unlikely to be centered around 0.5.
 * - prob_split_by_gain_avg
@@ -214,13 +222,14 @@
 *       criterion. Compared to a simple average, this tends to result in more evenly-divided splits and more clustered
 *       groups when they are smaller. Recommended to pass higher values when used for imputation of missing values.
 *       When used for outlier detection, higher values of this parameter result in models that are able to better flag
-*       outliers in the training data, but generalize poorly to outliers in new data and to values of variables
-*       outside of the ranges from the training data. Passing small 'sample_size' and high values of this parameter will
-*       tend to flag too many outliers. When splits are not made according to any of 'prob_pick_by_gain_avg',
-*       'prob_pick_by_gain_pl', 'prob_split_by_gain_avg', 'prob_split_by_gain_pl', both the column and the split point
-*       are decided at random. Note that, if passing value 1 (100%) with no sub-sampling and using the single-variable model,
-*       every single tree will have the exact same splits.
+*       outliers in the training data, but generalize poorly to outliers in new data (including out-of-bag samples
+*       for each tree) and to values of variables outside of the ranges from the training data. Passing small 
+*       'sample_size' and high values of this parameter will tend to flag too many outliers. When splits are not
+*       made according to any of 'prob_pick_by_gain_avg', 'prob_pick_by_gain_pl', 'prob_split_by_gain_avg', 'prob_split_by_gain_pl',
+*       both the column and the split point are decided at random. Note that, if passing value 1 (100%) with no 
+*       sub-sampling and using the single-variable model, every single tree will have the exact same splits.
 *       Be aware that 'penalize_range' can also have a large impact when using 'prob_pick_pooled_gain'.
+*       Under this option, models are likely to produce better results when increasing 'max_depth'.
 *       Important detail: if using either 'prob_pick_avg_gain' or 'prob_pick_pooled_gain', the distribution of
 *       outlier scores is unlikely to be centered around 0.5.
 * - prob_split_by_gain_pl
@@ -346,7 +355,7 @@ int fit_iforest(IsoForest *model_outputs, ExtIsoForest *model_outputs_ext,
                 real_t sample_weights[], bool with_replacement, bool weight_as_sample,
                 size_t nrows, size_t sample_size, size_t ntrees,
                 size_t max_depth, size_t ncols_per_tree,
-                bool   limit_depth, bool penalize_range,
+                bool   limit_depth, bool penalize_range, bool standardize_data,
                 bool   standardize_dist, double tmat[],
                 double output_depths[], bool standardize_depth,
                 real_t col_weights[], bool weigh_by_kurt,
@@ -389,7 +398,7 @@ int fit_iforest(IsoForest *model_outputs, ExtIsoForest *model_outputs_ext,
                                 std::vector<char>(), 0};
     ModelParams model_params = {with_replacement, sample_size, ntrees, ncols_per_tree,
                                 limit_depth? log2ceil(sample_size) : max_depth? max_depth : (sample_size - 1),
-                                penalize_range, random_seed, weigh_by_kurt,
+                                penalize_range, standardize_data, random_seed, weigh_by_kurt,
                                 prob_pick_by_gain_avg, (model_outputs == NULL)? 0 : prob_split_by_gain_avg,
                                 prob_pick_by_gain_pl,  (model_outputs == NULL)? 0 : prob_split_by_gain_pl,
                                 min_gain, cat_split_type, new_cat_action, missing_action, all_perm,
@@ -421,6 +430,7 @@ int fit_iforest(IsoForest *model_outputs, ExtIsoForest *model_outputs_ext,
         model_outputs->exp_avg_depth  = expected_avg_depth(sample_size);
         model_outputs->exp_avg_sep = expected_separation_depth(model_params.sample_size);
         model_outputs->orig_sample_size = input_data.nrows;
+        model_outputs->has_range_penalty = penalize_range;
     }
 
     else
@@ -433,6 +443,7 @@ int fit_iforest(IsoForest *model_outputs, ExtIsoForest *model_outputs_ext,
         model_outputs_ext->exp_avg_depth  = expected_avg_depth(sample_size);
         model_outputs_ext->exp_avg_sep = expected_separation_depth(model_params.sample_size);
         model_outputs_ext->orig_sample_size = input_data.nrows;
+        model_outputs_ext->has_range_penalty = penalize_range;
     }
 
     if (imputer != NULL)
@@ -654,8 +665,8 @@ int fit_iforest(IsoForest *model_outputs, ExtIsoForest *model_outputs_ext,
 *       Same parameter as for 'fit_iforest' (see the documentation in there for details). Cannot be changed from
 *       what was originally passed to 'fit_iforest'.
 * - ncat
-*       Same parameter as for 'fit_iforest' (see the documentation in there for details). Cannot be changed from
-*       what was originally passed to 'fit_iforest'.
+*       Same parameter as for 'fit_iforest' (see the documentation in there for details). May contain new categories,
+*       but should keep the same encodings that were used for previous categories.
 * - Xc[nnz]
 *       Pointer to numeric data in sparse numeric matrix in CSC format (column-compressed).
 *       Pass NULL if there are no sparse numeric columns.
@@ -693,6 +704,9 @@ int fit_iforest(IsoForest *model_outputs, ExtIsoForest *model_outputs_ext,
 *       Same parameter as for 'fit_iforest' (see the documentation in there for details). Can be changed from
 *       what was originally passed to 'fit_iforest'.
 * - limit_depth
+*       Same parameter as for 'fit_iforest' (see the documentation in there for details). Can be changed from
+*       what was originally passed to 'fit_iforest'.
+* - penalize_range
 *       Same parameter as for 'fit_iforest' (see the documentation in there for details). Can be changed from
 *       what was originally passed to 'fit_iforest'.
 * - penalize_range
@@ -759,7 +773,7 @@ int add_tree(IsoForest *model_outputs, ExtIsoForest *model_outputs_ext,
              size_t ndim, size_t ntry, CoefType coef_type, bool coef_by_prop,
              real_t sample_weights[], size_t nrows,
              size_t max_depth,     size_t ncols_per_tree,
-             bool   limit_depth,   bool penalize_range,
+             bool   limit_depth,   bool penalize_range, bool standardize_data,
              real_t col_weights[], bool weigh_by_kurt,
              double prob_pick_by_gain_avg, double prob_split_by_gain_avg,
              double prob_pick_by_gain_pl,  double prob_split_by_gain_pl,
@@ -790,7 +804,7 @@ int add_tree(IsoForest *model_outputs, ExtIsoForest *model_outputs_ext,
                                 std::vector<char>(), 0};
     ModelParams model_params = {false, nrows, (size_t)1, ncols_per_tree,
                                 max_depth? max_depth : (nrows - 1),
-                                penalize_range, random_seed, weigh_by_kurt,
+                                penalize_range, standardize_data, random_seed, weigh_by_kurt,
                                 prob_pick_by_gain_avg, (model_outputs == NULL)? 0 : prob_split_by_gain_avg,
                                 prob_pick_by_gain_pl,  (model_outputs == NULL)? 0 : prob_split_by_gain_pl,
                                 min_gain, cat_split_type, new_cat_action, missing_action, all_perm,
@@ -831,10 +845,14 @@ int add_tree(IsoForest *model_outputs, ExtIsoForest *model_outputs_ext,
                   impute_nodes,
                   last_tree);
 
-        if (model_outputs != NULL)
+        if (model_outputs != NULL) {
             model_outputs->trees.back().shrink_to_fit();
-        else
+            model_outputs->has_range_penalty = model_outputs->has_range_penalty || penalize_range;
+        }
+        else {
             model_outputs_ext->hplanes.back().shrink_to_fit();
+            model_outputs_ext->has_range_penalty = model_outputs_ext->has_range_penalty || penalize_range;
+        }
 
         if (imputer != NULL)
             imputer->imputer_tree.back().shrink_to_fit();

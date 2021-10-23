@@ -95,6 +95,23 @@ void calc_mean_and_sd_t(size_t ix_arr[], size_t st, size_t end, real_t_ *restric
 }
 
 template <class real_t_>
+double calc_mean_only(size_t ix_arr[], size_t st, size_t end, real_t_ *restrict x)
+{
+    size_t cnt = 0;
+    double m = 0;
+    for (size_t row = st; row <= end; row++)
+    {
+        if (!is_na_or_inf(x[ix_arr[row]]))
+        {
+            cnt++;
+            m += (x[ix_arr[row]] - m) / (double)cnt;
+        }
+    }
+
+    return m;
+}
+
+template <class real_t_>
 void calc_mean_and_sd(size_t ix_arr[], size_t st, size_t end, real_t_ *restrict x,
                       MissingAction missing_action, double &x_sd, double &x_mean)
 {
@@ -133,6 +150,25 @@ void calc_mean_and_sd_weighted(size_t ix_arr[], size_t st, size_t end, real_t_ *
 
     x_mean = m;
     x_sd   = std::sqrt(s / (long double)cnt);
+}
+
+template <class real_t_, class mapping>
+double calc_mean_only_weighted(size_t ix_arr[], size_t st, size_t end, real_t_ *restrict x, mapping w)
+{
+    double cnt = 0;
+    double w_this;
+    double m = 0;
+    for (size_t row = st; row <= end; row++)
+    {
+        if (!is_na_or_inf(x[ix_arr[row]]))
+        {
+            w_this = w[ix_arr[row]];
+            cnt += w_this;
+            m += w_this * (x[ix_arr[row]] - m) / cnt;
+        }
+    }
+
+    return m;
 }
 
 /* for sparse numerical */
@@ -227,6 +263,56 @@ void calc_mean_and_sd(size_t ix_arr[], size_t st, size_t end, size_t col_num,
     x_sd = std::fmax(SD_MIN, x_sd);
 }
 
+template <class real_t_, class sparse_ix>
+double calc_mean_only(size_t ix_arr[], size_t st, size_t end, size_t col_num,
+                      real_t_ *restrict Xc, sparse_ix Xc_ind[], sparse_ix Xc_indptr[])
+{
+    /* ix_arr must be already sorted beforehand */
+    if (Xc_indptr[col_num] == Xc_indptr[col_num + 1])
+        return 0;
+    size_t st_col  = Xc_indptr[col_num];
+    size_t end_col = Xc_indptr[col_num + 1] - 1;
+    size_t curr_pos = st_col;
+    size_t ind_end_col = (size_t) Xc_ind[end_col];
+    size_t *ptr_st = std::lower_bound(ix_arr + st, ix_arr + end + 1, (size_t)Xc_ind[st_col]);
+
+    size_t cnt = end - st + 1;
+    size_t added = 0;
+    double m = 0;
+
+    for (size_t *row = ptr_st;
+         row != ix_arr + end + 1 && curr_pos != end_col + 1 && ind_end_col >= *row;
+        )
+    {
+        if (Xc_ind[curr_pos] == (sparse_ix)(*row))
+        {
+            if (is_na_or_inf(Xc[curr_pos]))
+                cnt--;
+            else
+                m += (Xc[curr_pos] - m) / (double)(++added);
+
+            if (row == ix_arr + end || curr_pos == end_col) break;
+            curr_pos = std::lower_bound(Xc_ind + curr_pos + 1, Xc_ind + end_col + 1, *(++row)) - Xc_ind;
+        }
+
+        else
+        {
+            if (Xc_ind[curr_pos] > (sparse_ix)(*row))
+                row = std::lower_bound(row + 1, ix_arr + end + 1, Xc_ind[curr_pos]);
+            else
+                curr_pos = std::lower_bound(Xc_ind + curr_pos + 1, Xc_ind + end_col + 1, *row) - Xc_ind;
+        }
+    }
+
+    if (added == 0)
+        return 0;
+
+    if (cnt > added)
+        m *= ((long double)added / (long double)cnt);
+
+    return m;
+}
+
 template <class real_t_, class sparse_ix, class mapping>
 void calc_mean_and_sd_weighted(size_t ix_arr[], size_t st, size_t end, size_t col_num,
                                real_t_ *restrict Xc, sparse_ix Xc_ind[], sparse_ix Xc_indptr[],
@@ -311,6 +397,65 @@ void calc_mean_and_sd_weighted(size_t ix_arr[], size_t st, size_t end, size_t co
     x_sd   = std::sqrt(s / cnt);
 }
 
+template <class real_t_, class sparse_ix, class mapping>
+double calc_mean_only_weighted(size_t ix_arr[], size_t st, size_t end, size_t col_num,
+                               real_t_ *restrict Xc, sparse_ix Xc_ind[], sparse_ix Xc_indptr[],
+                               mapping w)
+{
+    /* ix_arr must be already sorted beforehand */
+    if (Xc_indptr[col_num] == Xc_indptr[col_num + 1])
+        return 0;
+    size_t st_col  = Xc_indptr[col_num];
+    size_t end_col = Xc_indptr[col_num + 1] - 1;
+    size_t curr_pos = st_col;
+    size_t ind_end_col = (size_t) Xc_ind[end_col];
+    size_t *ptr_st = std::lower_bound(ix_arr + st, ix_arr + end + 1, (size_t)Xc_ind[st_col]);
+
+    long double cnt = 0.;
+    for (size_t row = st; row <= end; row++)
+        cnt += w[ix_arr[row]];
+    long double added = 0;
+    double m = 0;
+    double w_this;
+
+    for (size_t *row = ptr_st;
+         row != ix_arr + end + 1 && curr_pos != end_col + 1 && ind_end_col >= *row;
+        )
+    {
+        if (Xc_ind[curr_pos] == (sparse_ix)(*row))
+        {
+            if (is_na_or_inf(Xc[curr_pos])) {
+                cnt -= w[*row];
+            }
+
+            else {
+                w_this = w[*row];
+                added += w_this;
+                m += w_this * (Xc[curr_pos] - m) / added;
+            }
+
+            if (row == ix_arr + end || curr_pos == end_col) break;
+            curr_pos = std::lower_bound(Xc_ind + curr_pos + 1, Xc_ind + end_col + 1, *(++row)) - Xc_ind;
+        }
+
+        else
+        {
+            if (Xc_ind[curr_pos] > (sparse_ix)(*row))
+                row = std::lower_bound(row + 1, ix_arr + end + 1, Xc_ind[curr_pos]);
+            else
+                curr_pos = std::lower_bound(Xc_ind + curr_pos + 1, Xc_ind + end_col + 1, *row) - Xc_ind;
+        }
+    }
+
+    if (added == 0)
+        return 0;
+
+    if (cnt > added)
+        m *= added / cnt;
+
+    return m;
+}
+
 /* Note about these functions: they write into an array that does not need to match to 'ix_arr',
    and instead, the index that is stored in ix_arr[n] will have the value in res[n] */
 
@@ -375,7 +520,7 @@ void add_linear_comb(size_t ix_arr[], size_t st, size_t end, double *restrict re
             fill_val = buffer_arr[mid_ceil];
 
         fill_val = (fill_val - x_mean) * coef;
-        if (cnt_NA)
+        if (cnt_NA && fill_val)
         {
             for (size_t row = 0; row < cnt_NA; row++)
                 res_write[buffer_NAs[row]] += fill_val;
@@ -470,7 +615,7 @@ void add_linear_comb_weighted(size_t ix_arr[], size_t st, size_t end, double *re
         }
 
         fill_val = (fill_val - x_mean) * coef;
-        if (cnt_NA)
+        if (cnt_NA && fill_val)
         {
             for (size_t row = 0; row < cnt_NA; row++)
                 res_write[buffer_NAs[row]] += fill_val;
@@ -505,8 +650,11 @@ void add_linear_comb(size_t *restrict ix_arr, size_t st, size_t end, size_t col_
 
         double *restrict res_write = res - st;
         double offset = x_mean * coef;
-        for (size_t row = st; row <= end; row++)
-            res_write[row] -= offset;
+        if (offset)
+        {
+            for (size_t row = st; row <= end; row++)
+                res_write[row] -= offset;
+        }
 
         return;
     }
@@ -526,8 +674,11 @@ void add_linear_comb(size_t *restrict ix_arr, size_t st, size_t end, size_t col_
 
     double *restrict res_write = res - st;
     double offset = x_mean * coef;
-    for (size_t row = st; row <= end; row++)
-        res_write[row] -= offset;
+    if (offset)
+    {
+        for (size_t row = st; row <= end; row++)
+            res_write[row] -= offset;
+    }
 
     size_t ind_end_col = Xc_ind[end_col];
     size_t nmatches = 0;
@@ -813,7 +964,7 @@ void add_linear_comb(size_t *restrict ix_arr, size_t st, size_t end, double *res
                     }
 
                     fill_val = (cnt_this > (cnt - cnt_NA - cnt_this))? single_cat_coef : 0;
-                    if (cnt_NA)
+                    if (cnt_NA && fill_val)
                     {
                         for (size_t row = st; row <= end; row++)
                             if (x[ix_arr[row]] < 0)
@@ -930,7 +1081,7 @@ void add_linear_comb(size_t *restrict ix_arr, size_t st, size_t end, double *res
                     if (new_cat_action != Smallest)
                         fill_new = fill_val;
 
-                    if (buffer_cnt[ncat] > 0) /* NAs */
+                    if (buffer_cnt[ncat] > 0 && fill_val) /* NAs */
                         for (size_t row = st; row <= end; row++)
                             if (x[ix_arr[row]] < 0)
                                 res_write[row] += fill_val;
@@ -1006,7 +1157,7 @@ void add_linear_comb_weighted(size_t *restrict ix_arr, size_t st, size_t end, do
                     }
 
                     fill_val = (cnt_this > cnt_other)? single_cat_coef : 0;
-                    if (has_NA)
+                    if (has_NA && fill_val)
                     {
                         for (size_t row = st; row <= end; row++)
                             if (x[ix_arr[row]] < 0)
@@ -1124,7 +1275,7 @@ void add_linear_comb_weighted(size_t *restrict ix_arr, size_t st, size_t end, do
                     if (new_cat_action != Smallest)
                         fill_new = fill_val;
 
-                    if (buffer_cnt[ncat] > 0) /* NAs */
+                    if (buffer_cnt[ncat] > 0 && fill_val) /* NAs */
                         for (size_t row = st; row <= end; row++)
                             if (x[ix_arr[row]] < 0)
                                 res_write[row] += fill_val;

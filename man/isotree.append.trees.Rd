@@ -10,7 +10,7 @@ isotree.append.trees(model, other)
 \item{model}{An Isolation Forest model (as returned by function \link{isolation.forest})
 to which trees from `other` (another Isolation Forest model) will be appended into.
 
-Will be modified in-place, and on exit will contain the resulting merged model.}
+\bold{Will be modified in-place}, and on exit will contain the resulting merged model.}
 
 \item{other}{Another Isolation Forest model, from which trees will be appended into
 `model`. It will not be modified during the call to this function.}
@@ -27,8 +27,8 @@ that is, same number of columns, same order of the columns, and same column type
 not necessarily same object classes (e.g. can mix `base::matrix` and `Matrix::dgCMatrix`).
 
 If the data has categorical variables, the models should have been built with parameter
-`recode_categ=FALSE` in the call to \link{isolation.forest} (which is \bold{not} the
-default), and the categorical columns passed as type `factor` with the same `levels` -
+`recode_categ=FALSE` in the call to \link{isolation.forest},
+and the categorical columns passed as type `factor` with the same `levels` -
 otherwise different models might be using different encodings for each categorical column,
 which will not be preserved as only the trees will be appended without any associated metadata.
 
@@ -39,6 +39,9 @@ potentially crashing the R process when using the resulting object.
 Also be aware that the first input will be modified in-place.
 }
 \details{
+Be aware that, if an out-of-memory error occurs, the resulting object might be rendered unusable
+(might crash when calling certain functions).
+
 For safety purposes, the model object can be deep copied (including the underlying C++ object)
 through function \link{isotree.deep.copy} before undergoing an in-place modification like this.
 }

@@ -531,7 +531,7 @@ double expected_sd_cat(double p[], size_t n, size_t pos[])
         for (size_t cat2 = 0; cat2 < cat1; cat2++)
             cum_var -= p[pos[cat1]] * p[pos[cat2]] / 2.0;
     }
-    return std::sqrt(std::fmax(cum_var, 0.));
+    return std::sqrt(std::fmax(cum_var, 0.0l));
 }
 
 template <class number>
@@ -578,7 +578,7 @@ double expected_sd_cat_single(number counts[], double p[], size_t n, size_t pos[
         }
 
     }
-    return std::sqrt(std::fmax(cum_var, 0.));
+    return std::sqrt(std::fmax(cum_var, 0.0l));
 }
 
 /* Note: this isn't exactly comparable to the pooled gain from numeric variables,
@@ -591,8 +591,8 @@ double categ_gain(number cnt_left, number cnt_right,
 {
     return (
             base_info -
-            (((cnt_left  <= 1)? 0 : ((long double)cnt_left  * logl((long double)cnt_left)))  - s_left) -
-            (((cnt_right <= 1)? 0 : ((long double)cnt_right * logl((long double)cnt_right))) - s_right)
+            (((cnt_left  <= 1)? 0 : ((long double)cnt_left  * std::log((long double)cnt_left)))  - s_left) -
+            (((cnt_right <= 1)? 0 : ((long double)cnt_right * std::log((long double)cnt_right))) - s_right)
             ) / cnt;
 }
 
@@ -669,8 +669,16 @@ double categ_gain(number cnt_left, number cnt_right,
     Maybe it should instead use sums of centered squares: sigma = sqrt((x-mean(x))^2/n)
     The sums of centered squares method is also likely to be more precise. */
 
+template <class real_t>
+double midpoint(real_t x, real_t y)
+{
+    real_t m = x + (y-x)/(real_t)2;
+    if ((double)m == (double)y)
+        return x;
+    else
+        return m;
+}
 
-#define avg_between(a, b) ((a) + ((b)-(a))/2.)
 #define sd_gain(sd, sd_left, sd_right) (1. - ((sd_left) + (sd_right)) / (2. * (sd)))
 #define pooled_gain(sd, cnt, sd_left, sd_right, cnt_left, cnt_right) \
     (1. - (1./(sd))*(  ( ((real_t)(cnt_left))/(cnt) )*(sd_left) + ( ((real_t)(cnt_right)/(cnt)) )*(sd_right)  ))
@@ -682,6 +690,7 @@ double find_split_rel_gain_t(real_t_ *restrict x, size_t n, double &split_point)
 {
     real_t this_gain;
     real_t best_gain = -HUGE_VAL;
+    real_t x1 = 0, x2 = 0;
     real_t sum_left = 0, sum_right = 0, sum_tot = 0;
     for (size_t row = 0; row < n; row++)
         sum_tot += x[row];
@@ -697,9 +706,11 @@ double find_split_rel_gain_t(real_t_ *restrict x, size_t n, double &split_point)
         if (this_gain > best_gain)
         {
             best_gain = this_gain;
-            split_point = avg_between(x[row], x[row+1]);
+            x1 = x[row]; x2 = x[row+1];
         }
     }
+    split_point = midpoint(x1, x2);
+    
     if (best_gain <= -HUGE_VAL)
         return best_gain;
     else
@@ -720,6 +731,7 @@ double find_split_rel_gain_t(real_t_ *restrict x, real_t_ xmean, size_t ix_arr[]
 {
     real_t this_gain;
     real_t best_gain = -HUGE_VAL;
+    split_ix = 0; /* <- avoid out-of-bounds at the end */
     real_t sum_left = 0, sum_right = 0, sum_tot = 0;
     for (size_t row = st; row <= end; row++)
         sum_tot += x[ix_arr[row]] - xmean;
@@ -735,10 +747,11 @@ double find_split_rel_gain_t(real_t_ *restrict x, real_t_ xmean, size_t ix_arr[]
         if (this_gain > best_gain)
         {
             best_gain = this_gain;
-            split_point = avg_between(x[ix_arr[row]], x[ix_arr[row+1]]);
             split_ix = row;
         }
     }
+    split_point = midpoint(x[ix_arr[split_ix]], x[ix_arr[split_ix+1]]);
+
     if (best_gain <= -HUGE_VAL)
         return best_gain;
     else
@@ -855,6 +868,7 @@ double find_split_std_gain_t(real_t_ *restrict x, size_t n, double *restrict sd_
     real_t best_gain = -HUGE_VAL;
     real_t this_sd, this_gain;
     real_t n_ = (real_t)n;
+    size_t best_ix = 0;
     for (size_t row = 0; row < n-1; row++)
     {
         running_mean   += (x[row] - running_mean) / (real_t)(row+1);
@@ -871,9 +885,11 @@ double find_split_std_gain_t(real_t_ *restrict x, size_t n, double *restrict sd_
         if (this_gain > best_gain && this_gain > min_gain)
         {
             best_gain = this_gain;
-            split_point = avg_between(x[row], x[row+1]);
+            best_ix = row;
         }
     }
+    split_point = midpoint(x[best_ix], x[best_ix+1]);
+
     return best_gain;
 }
 
@@ -901,6 +917,7 @@ double find_split_std_gain_weighted(real_t *restrict x, size_t n, double *restri
     double this_sd, this_gain;
     double w_this;
     long double currw = 0;
+    size_t best_ix = 0;
 
     for (size_t row = 0; row < n-1; row++)
     {
@@ -920,9 +937,11 @@ double find_split_std_gain_weighted(real_t *restrict x, size_t n, double *restri
         if (this_gain > best_gain && this_gain > min_gain)
         {
             best_gain = this_gain;
-            split_point = avg_between(x[sorted_ix[row]], x[sorted_ix[row+1]]);
+            best_ix = row;
         }
     }
+    split_point = midpoint(x[sorted_ix[best_ix]], x[sorted_ix[best_ix+1]]);
+
     return best_gain;
 }
 
@@ -937,6 +956,7 @@ double find_split_std_gain_t(real_t_ *restrict x, real_t_ xmean, size_t ix_arr[]
     real_t best_gain = -HUGE_VAL;
     real_t n = (real_t)(end - st + 1);
     real_t this_sd, this_gain;
+    split_ix = st;
     for (size_t row = st; row < end; row++)
     {
         running_mean   += ((x[ix_arr[row]] - xmean) - running_mean) / (real_t)(row-st+1);
@@ -953,10 +973,11 @@ double find_split_std_gain_t(real_t_ *restrict x, real_t_ xmean, size_t ix_arr[]
         if (this_gain > best_gain && this_gain > min_gain)
         {
             best_gain = this_gain;
-            split_point = avg_between(x[ix_arr[row]], x[ix_arr[row+1]]);
             split_ix = row;
         }
     }
+    split_point = midpoint(x[ix_arr[split_ix]], x[ix_arr[split_ix+1]]);
+
     return best_gain;
 }
 
@@ -983,6 +1004,8 @@ double find_split_std_gain_weighted(real_t *restrict x, real_t xmean, size_t ix_
     long double currw = 0;
     double this_sd, this_gain;
     double w_this;
+    split_ix = st;
+
     for (size_t row = st; row < end; row++)
     {
         w_this = w[ix_arr[row]];
@@ -1001,10 +1024,11 @@ double find_split_std_gain_weighted(real_t *restrict x, real_t xmean, size_t ix_
         if (this_gain > best_gain && this_gain > min_gain)
         {
             best_gain = this_gain;
-            split_point = avg_between(x[ix_arr[row]], x[ix_arr[row+1]]);
             split_ix = row;
         }
     }
+    split_point = midpoint(x[ix_arr[split_ix]], x[ix_arr[split_ix+1]]);
+
     return best_gain;
 }
 
@@ -1022,7 +1046,7 @@ double eval_guided_crit(double *restrict x, size_t n, GainCriterion criterion,
     if (n == 2)
     {
         if (x[0] == x[1]) return -HUGE_VAL;
-        split_point = avg_between(x[0], x[1]);
+        split_point = midpoint(x[0], x[1]);
         gain        = 1.;
         if (gain > min_gain)
             return gain;
@@ -1056,7 +1080,7 @@ double eval_guided_crit_weighted(double *restrict x, size_t n, GainCriterion cri
     if (n == 2)
     {
         if (x[0] == x[1]) return -HUGE_VAL;
-        split_point = avg_between(x[0], x[1]);
+        split_point = midpoint(x[0], x[1]);
         gain        = 1.;
         if (gain > min_gain)
             return gain;
@@ -1094,7 +1118,7 @@ double eval_guided_crit(size_t *restrict ix_arr, size_t st, size_t end, real_t_ 
     {
         if (x[ix_arr[st]] == x[ix_arr[end]])
             return -HUGE_VAL;
-        split_point = avg_between(x[ix_arr[st]], x[ix_arr[end]]);
+        split_point = midpoint(x[ix_arr[st]], x[ix_arr[end]]);
         split_ix    = st;
         gain        = 1.;
         if (gain > min_gain)
@@ -1143,7 +1167,7 @@ double eval_guided_crit_weighted(size_t *restrict ix_arr, size_t st, size_t end,
     {
         if (x[ix_arr[st]] == x[ix_arr[end]])
             return -HUGE_VAL;
-        split_point = avg_between(x[ix_arr[st]], x[ix_arr[end]]);
+        split_point = midpoint(x[ix_arr[st]], x[ix_arr[end]]);
         split_ix    = st;
         gain        = 1.;
         if (gain > min_gain)
@@ -1330,9 +1354,9 @@ double eval_guided_crit(size_t *restrict ix_arr, size_t st, size_t end, int *res
 
                     long double cnt_left = (long double)((end - st + 1) - cnt_max);
                     this_gain = (
-                                    (long double)cnt * logl((long double)cnt)
-                                        - cnt_left * logl(cnt_left)
-                                        - (long double)cnt_max * logl((long double)cnt_max)
+                                    (long double)cnt * std::log((long double)cnt)
+                                        - cnt_left * std::log(cnt_left)
+                                        - (long double)cnt_max * std::log((long double)cnt_max)
                                 ) / cnt;
                     best_gain = (this_gain > min_gain)? this_gain : best_gain;
                     break;
@@ -1412,7 +1436,7 @@ double eval_guided_crit(size_t *restrict ix_arr, size_t st, size_t end, int *res
                         if (buffer_cnt[buffer_pos[cat]])
                         {
                             s += (buffer_cnt[buffer_pos[cat]] <= 1)?
-                                  0 : ((long double) buffer_cnt[buffer_pos[cat]] * logl((long double)buffer_cnt[buffer_pos[cat]]));
+                                  0 : ((long double) buffer_cnt[buffer_pos[cat]] * std::log((long double)buffer_cnt[buffer_pos[cat]]));
                         }
 
                         else
@@ -1425,7 +1449,7 @@ double eval_guided_crit(size_t *restrict ix_arr, size_t st, size_t end, int *res
                     if ((int)st_pos >= (ncat-1)) return -HUGE_VAL;
 
                     /* calculate base info */
-                    long double base_info = cnt * logl(cnt) - s;
+                    long double base_info = cnt * std::log(cnt) - s;
 
                     if (all_perm)
                     {
@@ -1446,7 +1470,7 @@ double eval_guided_crit(size_t *restrict ix_arr, size_t st, size_t end, int *res
                                     cnt_left += buffer_cnt[buffer_pos[pos]];
                                     s_left   += (buffer_cnt[buffer_pos[pos]] <= 1)?
                                                  0 : ((long double) buffer_cnt[buffer_pos[pos]]
-                                                       * logl((long double) buffer_cnt[buffer_pos[pos]]));
+                                                       * std::log((long double) buffer_cnt[buffer_pos[pos]]));
                                 }
 
                                 else
@@ -1454,7 +1478,7 @@ double eval_guided_crit(size_t *restrict ix_arr, size_t st, size_t end, int *res
                                     cnt_right += buffer_cnt[buffer_pos[pos]];
                                     s_right   += (buffer_cnt[buffer_pos[pos]] <= 1)?
                                                   0 : ((long double) buffer_cnt[buffer_pos[pos]]
-                                                        * logl((long double) buffer_cnt[buffer_pos[pos]]));
+                                                        * std::log((long double) buffer_cnt[buffer_pos[pos]]));
                                 }
                             }
 
@@ -1488,9 +1512,9 @@ double eval_guided_crit(size_t *restrict ix_arr, size_t st, size_t end, int *res
                         {
                             buffer_split[buffer_pos[pos]] = 1;
                             s_left    += (buffer_cnt[buffer_pos[pos]] <= 1)?
-                                          0 : ((long double)buffer_cnt[buffer_pos[pos]] * logl((long double)buffer_cnt[buffer_pos[pos]]));
+                                          0 : ((long double)buffer_cnt[buffer_pos[pos]] * std::log((long double)buffer_cnt[buffer_pos[pos]]));
                             s_right   -= (buffer_cnt[buffer_pos[pos]] <= 1)?
-                                          0 : ((long double)buffer_cnt[buffer_pos[pos]] * logl((long double)buffer_cnt[buffer_pos[pos]]));
+                                          0 : ((long double)buffer_cnt[buffer_pos[pos]] * std::log((long double)buffer_cnt[buffer_pos[pos]]));
                             cnt_left  += buffer_cnt[buffer_pos[pos]];
                             cnt_right -= buffer_cnt[buffer_pos[pos]];
 
@@ -1626,10 +1650,10 @@ double eval_guided_crit_weighted(size_t *restrict ix_arr, size_t st, size_t end,
 
                     /* TODO: think of a better way of dealing with numbers between zero and one */
                     this_gain = (
-                                    std::fmax(1., cnt) * logl(std::fmax(1., cnt))
-                                        - std::fmax(1., cnt_left) * logl(std::fmax(1., cnt_left))
-                                        - std::fmax(1., cnt_max) * logl(std::fmax(1., cnt_max))
-                                ) / std::fmax(1., cnt);
+                                    std::fmax(1.0l, cnt) * std::log(std::fmax(1.0l, cnt))
+                                        - std::fmax(1.0l, cnt_left) * std::log(std::fmax(1.0l, cnt_left))
+                                        - std::fmax(1.0l, cnt_max) * std::log(std::fmax(1.0l, cnt_max))
+                                ) / std::fmax(1.0l, cnt);
                     best_gain = (this_gain > min_gain)? this_gain : best_gain;
                     break;
                 }
@@ -1708,7 +1732,7 @@ double eval_guided_crit_weighted(size_t *restrict ix_arr, size_t st, size_t end,
                         if (buffer_cnt[buffer_pos[cat]])
                         {
                             s += (buffer_cnt[buffer_pos[cat]] <= 1)?
-                                  0 : ((long double) buffer_cnt[buffer_pos[cat]] * logl((long double)buffer_cnt[buffer_pos[cat]]));
+                                  0.0l : ((long double) buffer_cnt[buffer_pos[cat]] * std::log((long double)buffer_cnt[buffer_pos[cat]]));
                         }
 
                         else
@@ -1721,7 +1745,7 @@ double eval_guided_crit_weighted(size_t *restrict ix_arr, size_t st, size_t end,
                     if ((int)st_pos >= (ncat-1)) return -HUGE_VAL;
 
                     /* calculate base info */
-                    long double base_info = std::fmax(1., cnt) * logl(std::fmax(1., cnt)) - s;
+                    long double base_info = std::fmax(1.0l, cnt) * std::log(std::fmax(10l, cnt)) - s;
 
                     if (all_perm)
                     {
@@ -1741,16 +1765,16 @@ double eval_guided_crit_weighted(size_t *restrict ix_arr, size_t st, size_t end,
                                 {
                                     cnt_left += buffer_cnt[buffer_pos[pos]];
                                     s_left   += (buffer_cnt[buffer_pos[pos]] <= 1)?
-                                                 0 : ((long double) buffer_cnt[buffer_pos[pos]]
-                                                       * logl((long double) buffer_cnt[buffer_pos[pos]]));
+                                                 0.0l : ((long double) buffer_cnt[buffer_pos[pos]]
+                                                          * std::log((long double) buffer_cnt[buffer_pos[pos]]));
                                 }
 
                                 else
                                 {
                                     cnt_right += buffer_cnt[buffer_pos[pos]];
                                     s_right   += (buffer_cnt[buffer_pos[pos]] <= 1)?
-                                                  0 : ((long double) buffer_cnt[buffer_pos[pos]]
-                                                        * logl((long double) buffer_cnt[buffer_pos[pos]]));
+                                                  0.0l : ((long double) buffer_cnt[buffer_pos[pos]]
+                                                           * std::log((long double) buffer_cnt[buffer_pos[pos]]));
                                 }
                             }
 
@@ -1784,9 +1808,9 @@ double eval_guided_crit_weighted(size_t *restrict ix_arr, size_t st, size_t end,
                         {
                             buffer_split[buffer_pos[pos]] = 1;
                             s_left    += (buffer_cnt[buffer_pos[pos]] <= 1)?
-                                          0 : ((long double)buffer_cnt[buffer_pos[pos]] * logl((long double)buffer_cnt[buffer_pos[pos]]));
+                                          0.0l : ((long double)buffer_cnt[buffer_pos[pos]] * std::log((long double)   buffer_cnt[buffer_pos[pos]]));
                             s_right   -= (buffer_cnt[buffer_pos[pos]] <= 1)?
-                                          0 : ((long double)buffer_cnt[buffer_pos[pos]] * logl((long double)buffer_cnt[buffer_pos[pos]]));
+                                          0.0l : ((long double)buffer_cnt[buffer_pos[pos]] * std::log((long double)   buffer_cnt[buffer_pos[pos]]));
                             cnt_left  += buffer_cnt[buffer_pos[pos]];
                             cnt_right -= buffer_cnt[buffer_pos[pos]];
 

@@ -51,7 +51,7 @@ ISOTREE_EXPORTED int fit_iforest(IsoForest *model_outputs, ExtIsoForest *model_o
                 real_t sample_weights[], bool with_replacement, bool weight_as_sample,
                 size_t nrows, size_t sample_size, size_t ntrees,
                 size_t max_depth,   size_t ncols_per_tree,
-                bool   limit_depth, bool penalize_range,
+                bool   limit_depth, bool penalize_range, bool standardize_data,
                 bool   standardize_dist, double tmat[],
                 double output_depths[], bool standardize_depth,
                 real_t col_weights[], bool weigh_by_kurt,
@@ -72,7 +72,7 @@ ISOTREE_EXPORTED int fit_iforest(IsoForest *model_outputs, ExtIsoForest *model_o
                 sample_weights, with_replacement, weight_as_sample,
                 nrows, sample_size, ntrees,
                 max_depth,   ncols_per_tree,
-                limit_depth, penalize_range,
+                limit_depth, penalize_range, standardize_data,
                 standardize_dist, tmat,
                 output_depths, standardize_depth,
                 col_weights, weigh_by_kurt,
@@ -91,7 +91,7 @@ ISOTREE_EXPORTED int add_tree(IsoForest *model_outputs, ExtIsoForest *model_outp
              size_t ndim, size_t ntry, CoefType coef_type, bool coef_by_prop,
              real_t sample_weights[], size_t nrows,
              size_t max_depth,     size_t ncols_per_tree,
-             bool   limit_depth,   bool penalize_range,
+             bool   limit_depth,   bool penalize_range, bool standardize_data,
              real_t col_weights[], bool weigh_by_kurt,
              double prob_pick_by_gain_avg, double prob_split_by_gain_avg,
              double prob_pick_by_gain_pl,  double prob_split_by_gain_pl,
@@ -109,7 +109,7 @@ ISOTREE_EXPORTED int add_tree(IsoForest *model_outputs, ExtIsoForest *model_outp
              ndim, ntry, coef_type, coef_by_prop,
              sample_weights, nrows,
              max_depth,     ncols_per_tree,
-             limit_depth,   penalize_range,
+             limit_depth,   penalize_range, standardize_data,
              col_weights, weigh_by_kurt,
              prob_pick_by_gain_avg, prob_split_by_gain_avg,
              prob_pick_by_gain_pl,  prob_split_by_gain_pl,
@@ -125,7 +125,8 @@ ISOTREE_EXPORTED void predict_iforest(real_t numeric_data[], int categ_data[],
                      real_t Xr[], sparse_ix Xr_ind[], sparse_ix Xr_indptr[],
                      size_t nrows, int nthreads, bool standardize,
                      IsoForest *model_outputs, ExtIsoForest *model_outputs_ext,
-                     double output_depths[],   sparse_ix tree_num[])
+                     double output_depths[],   sparse_ix tree_num[],
+                     double per_tree_depths[])
 {
     predict_iforest<real_t, sparse_ix>
                     (numeric_data, categ_data,
@@ -134,7 +135,8 @@ ISOTREE_EXPORTED void predict_iforest(real_t numeric_data[], int categ_data[],
                      Xr, Xr_ind, Xr_indptr,
                      nrows, nthreads, standardize,
                      model_outputs, model_outputs_ext,
-                     output_depths,   tree_num);
+                     output_depths,   tree_num,
+                     per_tree_depths);
 }
 ISOTREE_EXPORTED void calc_similarity(real_t numeric_data[], int categ_data[],
                      real_t Xc[], sparse_ix Xc_ind[], sparse_ix Xc_indptr[],
