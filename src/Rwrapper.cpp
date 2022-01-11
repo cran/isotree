@@ -18,11 +18,25 @@
 *     [5] https://sourceforge.net/projects/iforest/
 *     [6] https://math.stackexchange.com/questions/3388518/expected-number-of-paths-required-to-separate-elements-in-a-binary-tree
 *     [7] Quinlan, J. Ross. C4. 5: programs for machine learning. Elsevier, 2014.
-*     [8] Cortes, David. "Distance approximation using Isolation Forests." arXiv preprint arXiv:1910.12362 (2019).
-*     [9] Cortes, David. "Imputing missing values with unsupervised random trees." arXiv preprint arXiv:1911.06646 (2019).
+*     [8] Cortes, David.
+*         "Distance approximation using Isolation Forests."
+*         arXiv preprint arXiv:1910.12362 (2019).
+*     [9] Cortes, David.
+*         "Imputing missing values with unsupervised random trees."
+*         arXiv preprint arXiv:1911.06646 (2019).
+*     [10] https://math.stackexchange.com/questions/3333220/expected-average-depth-in-random-binary-tree-constructed-top-to-bottom
+*     [11] Cortes, David.
+*          "Revisiting randomized choices in isolation forests."
+*          arXiv preprint arXiv:2110.13402 (2021).
+*     [12] Guha, Sudipto, et al.
+*          "Robust random cut forest based anomaly detection on streams."
+*          International conference on machine learning. PMLR, 2016.
+*     [13] Cortes, David.
+*          "Isolation forests: looking beyond tree depth."
+*          arXiv preprint arXiv:2111.11639 (2021).
 * 
 *     BSD 2-Clause License
-*     Copyright (c) 2019-2021, David Cortes
+*     Copyright (c) 2019-2022, David Cortes
 *     All rights reserved.
 *     Redistribution and use in source and binary forms, with or without
 *     modification, are permitted provided that the following conditions are met:
@@ -58,10 +72,10 @@
 #include "isotree.h"
 
 /* Library is templated, base R comes with only these 2 types though */
-#include "model_joined.h"
+#include "headers_joined.h"
 #define real_t double
 #define sparse_ix int
-#include "instantiate_model.h"
+#include "instantiate_template_headers.h"
 
 /* For imputing CSR matrices with differing columns from input */
 #include "other_helpers.h"
@@ -213,10 +227,13 @@ Rcpp::List fit_model(Rcpp::NumericVector X_num, Rcpp::IntegerVector X_cat, Rcpp:
                      size_t nrows, size_t ncols_numeric, size_t ncols_categ, size_t ndim, size_t ntry,
                      Rcpp::CharacterVector coef_type, bool coef_by_prop, bool with_replacement, bool weight_as_sample,
                      size_t sample_size, size_t ntrees,  size_t max_depth, size_t ncols_per_tree, bool limit_depth,
-                     bool penalize_range, bool standardize_data, bool calc_dist, bool standardize_dist, bool sq_dist,
+                     bool penalize_range, bool standardize_data,
+                     Rcpp::CharacterVector scoring_metric, bool fast_bratio,
+                     bool calc_dist, bool standardize_dist, bool sq_dist,
                      bool calc_depth, bool standardize_depth, bool weigh_by_kurt,
-                     double prob_pick_by_gain_avg, double prob_split_by_gain_avg,
-                     double prob_pick_by_gain_pl,  double prob_split_by_gain_pl, double min_gain,
+                     double prob_pick_by_gain_pl, double prob_pick_by_gain_avg,
+                     double prob_pick_col_by_range, double prob_pick_col_by_var,
+                     double prob_pick_col_by_kurt, double min_gain,
                      Rcpp::CharacterVector cat_split_type, Rcpp::CharacterVector new_cat_action,
                      Rcpp::CharacterVector missing_action, bool all_perm,
                      bool build_imputer, bool output_imputations, size_t min_imp_obs,
@@ -271,6 +288,7 @@ Rcpp::List fit_model(Rcpp::NumericVector X_num, Rcpp::IntegerVector X_cat, Rcpp:
     MissingAction   missing_action_C  =  Divide;
     UseDepthImp     depth_imp_C       =  Higher;
     WeighImpRows    weigh_imp_rows_C  =  Inverse;
+    ScoringMetric   scoring_metric_C  =  Depth;
 
     if (Rcpp::as<std::string>(coef_type) == "uniform")
     {
@@ -311,6 +329,30 @@ Rcpp::List fit_model(Rcpp::NumericVector X_num, Rcpp::IntegerVector X_cat, Rcpp:
     else if (Rcpp::as<std::string>(weigh_imp_rows) == "flat")
     {
         weigh_imp_rows_C  =  Flat;
+    }
+    if (Rcpp::as<std::string>(scoring_metric) == "adj_depth")
+    {
+        scoring_metric_C  =  AdjDepth;
+    }
+    else if (Rcpp::as<std::string>(scoring_metric) == "density")
+    {
+        scoring_metric_C  =  Density;
+    }
+    else if (Rcpp::as<std::string>(scoring_metric) == "adj_density")
+    {
+        scoring_metric_C  =  AdjDensity;
+    }
+    else if (Rcpp::as<std::string>(scoring_metric) == "boxed_density")
+    {
+        scoring_metric_C  =  BoxedDensity;
+    }
+    else if (Rcpp::as<std::string>(scoring_metric) == "boxed_density2")
+    {
+        scoring_metric_C  =  BoxedDensity2;
+    }
+    else if (Rcpp::as<std::string>(scoring_metric) == "boxed_ratio")
+    {
+        scoring_metric_C  =  BoxedRatio;
     }
 
     Rcpp::NumericVector  tmat    =  Rcpp::NumericVector();
@@ -374,11 +416,13 @@ Rcpp::List fit_model(Rcpp::NumericVector X_num, Rcpp::IntegerVector X_cat, Rcpp:
                 sample_weights_ptr, with_replacement, weight_as_sample,
                 nrows, sample_size, ntrees, max_depth, ncols_per_tree,
                 limit_depth, penalize_range, standardize_data,
+                scoring_metric_C, fast_bratio,
                 standardize_dist, tmat_ptr,
                 depths_ptr, standardize_depth,
                 col_weights_ptr, weigh_by_kurt,
-                prob_pick_by_gain_avg, prob_split_by_gain_avg,
-                prob_pick_by_gain_pl,  prob_split_by_gain_pl,
+                prob_pick_by_gain_pl, prob_pick_by_gain_avg,
+                prob_pick_col_by_range, prob_pick_col_by_var,
+                prob_pick_col_by_kurt,
                 min_gain, missing_action_C,
                 cat_split_type_C, new_cat_action_C,
                 all_perm, imputer_ptr.get(), min_imp_obs,
@@ -473,9 +517,10 @@ void fit_tree(SEXP model_R_ptr, Rcpp::RawVector serialized_obj, Rcpp::RawVector 
               size_t nrows, size_t ncols_numeric, size_t ncols_categ,
               size_t ndim, size_t ntry, Rcpp::CharacterVector coef_type, bool coef_by_prop,
               size_t max_depth, size_t ncols_per_tree, bool limit_depth, bool penalize_range,
-              bool standardize_data, bool weigh_by_kurt,
-              double prob_pick_by_gain_avg, double prob_split_by_gain_avg,
-              double prob_pick_by_gain_pl,  double prob_split_by_gain_pl, double min_gain,
+              bool standardize_data, bool fast_bratio, bool weigh_by_kurt,
+              double prob_pick_by_gain_pl, double prob_pick_by_gain_avg,
+              double prob_pick_col_by_range, double prob_pick_col_by_var,
+              double prob_pick_col_by_kurt, double min_gain,
               Rcpp::CharacterVector cat_split_type, Rcpp::CharacterVector new_cat_action,
               Rcpp::CharacterVector missing_action, bool build_imputer, size_t min_imp_obs, SEXP imp_R_ptr,
               Rcpp::CharacterVector depth_imp, Rcpp::CharacterVector weigh_imp_rows,
@@ -578,6 +623,7 @@ void fit_tree(SEXP model_R_ptr, Rcpp::RawVector serialized_obj, Rcpp::RawVector 
     {
         weigh_imp_rows_C  =  Flat;
     }
+    
 
     IsoForest*     model_ptr      =  NULL;
     ExtIsoForest*  ext_model_ptr  =  NULL;
@@ -599,10 +645,11 @@ void fit_tree(SEXP model_R_ptr, Rcpp::RawVector serialized_obj, Rcpp::RawVector 
              ndim, ntry, coef_type_C, coef_by_prop,
              sample_weights_ptr,
              nrows, max_depth, ncols_per_tree,
-             limit_depth,  penalize_range, standardize_data,
+             limit_depth,  penalize_range, standardize_data, fast_bratio,
              col_weights_ptr, weigh_by_kurt,
-             prob_pick_by_gain_avg, prob_split_by_gain_avg,
-             prob_pick_by_gain_pl,  prob_split_by_gain_pl,
+             prob_pick_by_gain_pl, prob_pick_by_gain_avg,
+             prob_pick_col_by_range, prob_pick_col_by_var,
+             prob_pick_col_by_kurt,
              min_gain, missing_action_C,
              cat_split_type_C, new_cat_action_C,
              depth_imp_C, weigh_imp_rows_C, all_perm,

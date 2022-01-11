@@ -18,11 +18,25 @@
 *     [5] https://sourceforge.net/projects/iforest/
 *     [6] https://math.stackexchange.com/questions/3388518/expected-number-of-paths-required-to-separate-elements-in-a-binary-tree
 *     [7] Quinlan, J. Ross. C4. 5: programs for machine learning. Elsevier, 2014.
-*     [8] Cortes, David. "Distance approximation using Isolation Forests." arXiv preprint arXiv:1910.12362 (2019).
-*     [9] Cortes, David. "Imputing missing values with unsupervised random trees." arXiv preprint arXiv:1911.06646 (2019).
+*     [8] Cortes, David.
+*         "Distance approximation using Isolation Forests."
+*         arXiv preprint arXiv:1910.12362 (2019).
+*     [9] Cortes, David.
+*         "Imputing missing values with unsupervised random trees."
+*         arXiv preprint arXiv:1911.06646 (2019).
+*     [10] https://math.stackexchange.com/questions/3333220/expected-average-depth-in-random-binary-tree-constructed-top-to-bottom
+*     [11] Cortes, David.
+*          "Revisiting randomized choices in isolation forests."
+*          arXiv preprint arXiv:2110.13402 (2021).
+*     [12] Guha, Sudipto, et al.
+*          "Robust random cut forest based anomaly detection on streams."
+*          International conference on machine learning. PMLR, 2016.
+*     [13] Cortes, David.
+*          "Isolation forests: looking beyond tree depth."
+*          arXiv preprint arXiv:2111.11639 (2021).
 * 
 *     BSD 2-Clause License
-*     Copyright (c) 2019-2021, David Cortes
+*     Copyright (c) 2019-2022, David Cortes
 *     All rights reserved.
 *     Redistribution and use in source and binary forms, with or without
 *     modification, are permitted provided that the following conditions are met:
@@ -79,7 +93,7 @@ void split_hplane_recursive(std::vector<IsoHPlane>   &hplanes,
     sum_weight = calculate_sum_weights(workspace.ix_arr, workspace.st, workspace.end, curr_depth,
                                        workspace.weights_arr, workspace.weights_map);
 
-    if (curr_depth > 0 && (workspace.weights_arr.size() || workspace.weights_map.size()) && sum_weight <= 1)
+    if (curr_depth > 0 && (!workspace.weights_arr.empty() || !workspace.weights_map.empty()) && sum_weight <= 1)
         goto terminal_statistics;
 
     /* for sparse matrices, need to sort the indices */
@@ -111,9 +125,129 @@ void split_hplane_recursive(std::vector<IsoHPlane>   &hplanes,
         workspace.ntry = 1;
     }
 
-    if (workspace.criterion != NoCrit && (workspace.weights_arr.size() || workspace.weights_map.size()))
+    /* pick column selection method also according to criteria */
+    if (
+        (workspace.criterion != NoCrit &&
+         std::max(workspace.ntry, (size_t)1) >= workspace.col_sampler.get_remaining_cols())
+            ||
+        (workspace.col_sampler.get_remaining_cols() <= model_params.ndim)
+    ) {
+        workspace.prob_split_type = 0;
+    }
+    else {
+        workspace.prob_split_type = workspace.rbin(workspace.rnd_generator);
+    }
+
+    if (
+            workspace.prob_split_type
+                < model_params.prob_pick_col_by_range
+        )
     {
-        if (workspace.weights_arr.size())
+        workspace.col_criterion = ByRange;
+        if (curr_depth == 0 && is_boxed_metric(model_params.scoring_metric))
+        {
+            for (size_t col = 0; col < input_data.ncols_numeric; col++)
+                workspace.node_col_weights[col] = workspace.density_calculator.box_high[col]
+                                                   - workspace.density_calculator.box_low[col];
+            add_col_weights_to_ranges:
+            if (workspace.tree_kurtoses != NULL)
+            {
+                for (size_t col = 0; col < input_data.ncols_numeric; col++)
+                {
+                    if (workspace.node_col_weights[col] <= 0) continue;
+                    workspace.node_col_weights[col] *= workspace.tree_kurtoses[col];
+                    workspace.node_col_weights[col]  = std::fmax(workspace.node_col_weights[col], 1e-100);
+                }
+            }
+            else if (input_data.col_weights != NULL)
+            {
+                for (size_t col = 0; col < input_data.ncols_numeric; col++)
+                {
+                    if (workspace.node_col_weights[col] <= 0) continue;
+                    workspace.node_col_weights[col] *= input_data.col_weights[col];
+                    workspace.node_col_weights[col]  = std::fmax(workspace.node_col_weights[col], 1e-100);
+                }
+            }
+        }
+        
+        else if (curr_depth == 0 &&
+                 model_params.sample_size == input_data.nrows &&
+                 !model_params.with_replacement &&
+                 input_data.range_low != NULL &&
+                 (model_params.ncols_per_tree == 0 || model_params.ncols_per_tree == input_data.ncols_tot))
+        {
+            for (size_t col = 0; col < input_data.ncols_numeric; col++)
+                workspace.node_col_weights[col] = input_data.range_high[col]
+                                                   - input_data.range_low[col];
+            goto add_col_weights_to_ranges;
+        }
+        
+        else
+        {
+            calc_ranges_all_cols(input_data, workspace, model_params, workspace.node_col_weights.data(),
+                                 NULL,
+                                 NULL);
+        }
+        
+        workspace.has_saved_stats = false;
+    }
+
+    else if (
+            workspace.prob_split_type
+                < (model_params.prob_pick_col_by_range +
+                   model_params.prob_pick_col_by_var)
+        )
+    {
+        workspace.col_criterion = ByVar;
+        workspace.has_saved_stats = model_params.standardize_data || model_params.missing_action != Fail;
+        calc_var_all_cols(input_data, workspace, model_params,
+                          workspace.node_col_weights.data(),
+                          NULL, NULL,
+                          workspace.has_saved_stats? workspace.saved_stat1.data() : NULL,
+                          workspace.has_saved_stats? workspace.saved_stat2.data() : NULL);
+    }
+
+    else if (
+            workspace.prob_split_type
+                < (model_params.prob_pick_col_by_range +
+                   model_params.prob_pick_col_by_var +
+                   model_params.prob_pick_col_by_kurt)
+        )
+    {
+        workspace.col_criterion = ByKurt;
+        calc_kurt_all_cols(input_data, workspace, model_params, workspace.node_col_weights.data(),
+                           NULL,
+                           NULL);
+        workspace.has_saved_stats = false;
+    }
+
+    else
+    {
+        workspace.col_criterion = Uniformly;
+        workspace.has_saved_stats = false;
+    }
+
+    if (workspace.col_criterion != Uniformly)
+    {
+        if (!workspace.node_col_sampler.initialize(workspace.node_col_weights.data(),
+                                                   &workspace.col_sampler.col_indices,
+                                                   workspace.col_sampler.curr_pos,
+                                                   model_params.ndim,
+                                                   model_params.ntry > 1))
+        {
+            goto terminal_statistics;
+        }
+
+        if (model_params.ntry > 1)
+        {
+            workspace.node_col_sampler.backup(workspace.node_col_sampler_backup, input_data.ncols_tot);
+        }
+    }
+
+
+    if (workspace.criterion != NoCrit && (!workspace.weights_arr.empty() || !workspace.weights_map.empty()))
+    {
+        if (!workspace.weights_arr.empty())
         {
             for (size_t row = workspace.st; row <= workspace.end; row++)
                 workspace.sample_weights[row-workspace.st] = workspace.weights_arr[workspace.ix_arr[row]];
@@ -130,19 +264,28 @@ void split_hplane_recursive(std::vector<IsoHPlane>   &hplanes,
 
     for (size_t attempt = 0; attempt < workspace.ntry; attempt++)
     {
-        if (input_data.ncols_tot < 1e5 ||
-            ((long double)model_params.ndim / (long double)workspace.col_sampler.get_remaining_cols()) > .25
-            )
+        if (attempt > 0 && workspace.col_criterion != Uniformly)
         {
-            if (!col_is_taken.size())
-                col_is_taken.resize(input_data.ncols_tot, false);
-            else
-                col_is_taken.assign(input_data.ncols_tot, false);
+            workspace.node_col_sampler.restore(workspace.node_col_sampler_backup);
         }
-        else {
-            col_is_taken_s.clear();
-            col_is_taken_s.reserve(model_params.ndim);
+
+        if (workspace.col_criterion == Uniformly)
+        {
+            if (input_data.ncols_tot < 1e5 ||
+                ((long double)model_params.ndim / (long double)workspace.col_sampler.get_remaining_cols()) > .25
+                )
+            {
+                if (!col_is_taken.size())
+                    col_is_taken.resize(input_data.ncols_tot, false);
+                else
+                    col_is_taken.assign(input_data.ncols_tot, false);
+            }
+            else {
+                col_is_taken_s.clear();
+                col_is_taken_s.reserve(model_params.ndim);
+            }
         }
+        
         workspace.ntaken = 0;
         workspace.ntried = 0;
         std::fill(workspace.comb_val.begin(),
@@ -151,18 +294,23 @@ void split_hplane_recursive(std::vector<IsoHPlane>   &hplanes,
 
         if (model_params.ndim >= input_data.ncols_tot)
             workspace.col_sampler.prepare_full_pass();
-        else if (workspace.try_all)
+        else if (workspace.try_all && workspace.col_criterion == Uniformly)
             workspace.col_sampler.shuffle_remainder(workspace.rnd_generator);
         size_t threshold_shuffle = (workspace.col_sampler.get_remaining_cols() + 1) / 2;
 
         while (
-                workspace.try_all?
-                workspace.col_sampler.sample_col(workspace.col_chosen)
+                (workspace.col_criterion != Uniformly)?
+                workspace.node_col_sampler.sample_col(workspace.col_chosen, workspace.rnd_generator)
                     :
-                workspace.col_sampler.sample_col(workspace.col_chosen, workspace.rnd_generator)
+                (workspace.try_all?
+                 workspace.col_sampler.sample_col(workspace.col_chosen)
+                     :
+                 workspace.col_sampler.sample_col(workspace.col_chosen, workspace.rnd_generator))
             )
         {
             if (interrupt_switch) return;
+
+            if (workspace.col_criterion != Uniformly) goto add_this_col;
             
             workspace.ntried++;
             if (!workspace.try_all && workspace.ntried >= threshold_shuffle)
@@ -177,6 +325,8 @@ void split_hplane_recursive(std::vector<IsoHPlane>   &hplanes,
             get_split_range(workspace, input_data, model_params);
             if (workspace.unsplittable)
             {
+                if (workspace.col_criterion != Uniformly) /* <- used 'node_col_sampler' */
+                    unexpected_error();
                 workspace.col_sampler.drop_col(workspace.col_chosen
                                                  +
                                                ((workspace.col_type == Numeric)?
@@ -185,6 +335,7 @@ void split_hplane_recursive(std::vector<IsoHPlane>   &hplanes,
 
             else
             {
+                add_this_col:
                 add_chosen_column(workspace, input_data, model_params, col_is_taken, col_is_taken_s);
                 if (++workspace.ntaken >= model_params.ndim)
                     break;
@@ -200,12 +351,12 @@ void split_hplane_recursive(std::vector<IsoHPlane>   &hplanes,
         /* evaluate gain if necessary */
         if (workspace.criterion != NoCrit)
         {
-            if (!workspace.weights_arr.size() && !workspace.weights_map.size())
+            if (workspace.weights_arr.empty() && workspace.weights_map.empty())
                 workspace.this_gain = eval_guided_crit(workspace.comb_val.data(), workspace.end - workspace.st + 1,
                                                        workspace.criterion, model_params.min_gain, workspace.ntry == 1,
                                                        workspace.buffer_dbl.data(), workspace.this_split_point,
                                                        workspace.xmin, workspace.xmax);
-            else if (workspace.weights_arr.size())
+            else if (!workspace.weights_arr.empty())
                 workspace.this_gain = eval_guided_crit_weighted(workspace.comb_val.data(), workspace.end - workspace.st + 1,
                                                                 workspace.criterion, model_params.min_gain, workspace.ntry == 1,
                                                                 workspace.buffer_dbl.data(), workspace.this_split_point,
@@ -244,6 +395,11 @@ void split_hplane_recursive(std::vector<IsoHPlane>   &hplanes,
 
             if (model_params.missing_action != Fail)
                 hplanes.back().fill_val.assign(workspace.ext_fill_val.begin(), workspace.ext_fill_val.begin() + workspace.ntaken);
+
+            if (model_params.scoring_metric != Depth && !is_boxed_metric(model_params.scoring_metric))
+            {
+                workspace.density_calculator.save_range(workspace.xmin, workspace.xmax);
+            }
 
             if (input_data.ncols_categ)
             {
@@ -384,6 +540,62 @@ void split_hplane_recursive(std::vector<IsoHPlane>   &hplanes,
 
     shrink_to_fit_hplane(hplanes.back(), false);
 
+    /* if using a custom scoring metric, need to calculate it now */
+    if (model_params.scoring_metric != Depth)
+    {
+        if (workspace.criterion != NoCrit)
+            workspace.density_calculator.restore_range(workspace.xmin, workspace.xmax);
+
+        if (model_params.scoring_metric == Density)
+        {
+            workspace.density_calculator.push_density(workspace.xmin, workspace.xmax, hplanes.back().split_point);
+        }
+
+        else if (is_boxed_metric(model_params.scoring_metric))
+        {
+            workspace.density_calculator.push_bdens_ext(hplanes.back(), model_params);
+        }
+
+        else
+        {
+            double pct_tree_left;
+            if (workspace.weights_arr.empty() && workspace.weights_map.empty())
+            {
+                pct_tree_left = (ldouble_safe)(workspace.split_ix - workspace.st)
+                                / (ldouble_safe)(workspace.end - workspace.st + 1);
+            }
+            
+            else
+            {
+                ldouble_safe wtot = 0;
+                ldouble_safe wleft = 0;
+                if (!workspace.weights_arr.empty())
+                {
+                    for (size_t ix = workspace.st; ix < workspace.split_ix; ix++)
+                        wtot += workspace.weights_arr[workspace.ix_arr[ix]];
+                    wleft = wtot;
+                    for (size_t ix = workspace.split_ix; ix <= workspace.end; ix++)
+                        wtot += workspace.weights_arr[workspace.ix_arr[ix]];
+                }
+
+                else
+                {
+                    for (size_t ix = workspace.st; ix < workspace.split_ix; ix++)
+                        wtot += workspace.weights_map[workspace.ix_arr[ix]];
+                    wleft = wtot;
+                    for (size_t ix = workspace.split_ix; ix <= workspace.end; ix++)
+                        wtot += workspace.weights_map[workspace.ix_arr[ix]];
+                }
+
+                pct_tree_left = wleft / wtot;
+            }
+
+            workspace.density_calculator.push_adj(workspace.xmin, workspace.xmax,
+                                                  hplanes.back().split_point, pct_tree_left,
+                                                  model_params.scoring_metric);
+        }
+    }
+
     /* now split */
 
     /* back-up where it was */
@@ -406,7 +618,14 @@ void split_hplane_recursive(std::vector<IsoHPlane>   &hplanes,
     hplanes[hplane_from].hplane_right = hplanes.size();
     recursion_state->restore_state(workspace);
     hplanes.emplace_back();
+
     if (impute_nodes != NULL) impute_nodes->emplace_back(hplane_from);
+    if (is_boxed_metric(model_params.scoring_metric)) {
+        workspace.density_calculator.pop_bdens_ext();
+    }
+    else if (model_params.scoring_metric != Depth) {
+        workspace.density_calculator.pop();
+    }
     workspace.st = workspace.split_ix;
     split_hplane_recursive(hplanes,
                            workspace,
@@ -414,29 +633,93 @@ void split_hplane_recursive(std::vector<IsoHPlane>   &hplanes,
                            model_params,
                            impute_nodes,
                            curr_depth + 1);
+    if (is_boxed_metric(model_params.scoring_metric)) {
+        workspace.density_calculator.pop_bdens_ext_right();
+    }
+    else if (model_params.scoring_metric != Depth) {
+        workspace.density_calculator.pop_right();
+    }
 
     return;
 
     terminal_statistics:
     {
-        if (!workspace.weights_arr.size() && !workspace.weights_map.size())
-        {
-            hplanes.back().score = (double)(curr_depth + expected_avg_depth(workspace.end - workspace.st + 1));
-        }
+        hplanes.back().hplane_left = 0;
 
-        else
+        bool has_weights = !workspace.weights_arr.empty() || !workspace.weights_map.empty();
+        if (has_weights)
         {
             if (sum_weight == -HUGE_VAL)
                 sum_weight = calculate_sum_weights(workspace.ix_arr, workspace.st, workspace.end, curr_depth,
                                                    workspace.weights_arr, workspace.weights_map);
-            hplanes.back().score = (double)(curr_depth + expected_avg_depth(sum_weight));
+        }
+
+        switch (model_params.scoring_metric)
+        {
+            case Depth:
+            {
+                if (!has_weights)
+                    hplanes.back().score = curr_depth + expected_avg_depth(workspace.end - workspace.st + 1);
+                else
+                    hplanes.back().score = curr_depth + expected_avg_depth(sum_weight);
+                break;
+            }
+
+            case AdjDepth:
+            {
+                if (!has_weights)
+                    hplanes.back().score = workspace.density_calculator.calc_adj_depth() + expected_avg_depth(workspace.end - workspace.st + 1);
+                else
+                    hplanes.back().score = workspace.density_calculator.calc_adj_depth() + expected_avg_depth(sum_weight);
+                break;
+            }
+
+            case Density:
+            {
+                if (!has_weights)
+                    hplanes.back().score = workspace.density_calculator.calc_density(workspace.end - workspace.st + 1, model_params.sample_size);
+                else
+                    hplanes.back().score = workspace.density_calculator.calc_density(sum_weight, model_params.sample_size);
+                break;
+            }
+
+            case AdjDensity:
+            {
+                hplanes.back().score = workspace.density_calculator.calc_adj_density();
+                break;
+            }
+
+            case BoxedRatio:
+            {
+                hplanes.back().score = workspace.density_calculator.calc_bratio_ext();
+                break;
+            }
+
+            case BoxedDensity:
+            {
+                if (!has_weights)
+                    hplanes.back().score = workspace.density_calculator.calc_bdens_ext(workspace.end - workspace.st + 1, model_params.sample_size);
+                else
+                    hplanes.back().score = workspace.density_calculator.calc_bdens_ext(sum_weight, model_params.sample_size);
+                break;
+            }
+
+            case BoxedDensity2:
+            {
+                if (!has_weights)
+                    hplanes.back().score = workspace.density_calculator.calc_bdens_ext(workspace.end - workspace.st + 1, model_params.sample_size);
+                else
+                    hplanes.back().score = workspace.density_calculator.calc_bdens_ext(sum_weight, model_params.sample_size);
+                break;
+            }
+
         }
 
         /* don't leave any vector initialized */
         shrink_to_fit_hplane(hplanes.back(), true);
 
-        hplanes.back().remainder = workspace.weights_arr.size()?
-                                   sum_weight : (workspace.weights_map.size()?
+        hplanes.back().remainder = (!workspace.weights_arr.empty())?
+                                   sum_weight : ((!workspace.weights_map.empty())?
                                                  sum_weight : ((double)(workspace.end - workspace.st + 1))
                                                  );
 
@@ -445,7 +728,7 @@ void split_hplane_recursive(std::vector<IsoHPlane>   &hplanes,
             add_remainder_separation_steps(workspace, input_data, sum_weight);
 
         /* add this depth right away if requested */
-        if (workspace.row_depths.size())
+        if (!workspace.row_depths.empty())
             for (size_t row = workspace.st; row <= workspace.end; row++)
                 workspace.row_depths[workspace.ix_arr[row]] += hplanes.back().score;
 
@@ -460,7 +743,18 @@ template <class InputData, class WorkerMemory>
 void add_chosen_column(WorkerMemory &workspace, InputData &input_data, ModelParams &model_params,
                        std::vector<bool> &col_is_taken, hashed_set<size_t> &col_is_taken_s)
 {
-    set_col_as_taken(col_is_taken, col_is_taken_s, input_data, workspace.col_chosen, workspace.col_type);
+    if (workspace.col_criterion == Uniformly) {
+        set_col_as_taken(col_is_taken, col_is_taken_s, input_data, workspace.col_chosen, workspace.col_type);
+    }
+    else {
+        if (workspace.col_chosen < input_data.ncols_numeric) {
+            workspace.col_type = Numeric;
+        }
+        else {
+            workspace.col_chosen -= input_data.ncols_numeric;
+            workspace.col_type = Categorical;
+        }
+    }
     workspace.col_take[workspace.ntaken]      = workspace.col_chosen;
     workspace.col_take_type[workspace.ntaken] = workspace.col_type;
 
@@ -485,7 +779,7 @@ void add_chosen_column(WorkerMemory &workspace, InputData &input_data, ModelPara
 
             if (input_data.Xc_indptr == NULL)
             {
-                if (!workspace.weights_arr.size() && !workspace.weights_map.size())
+                if (workspace.weights_arr.empty() && workspace.weights_map.empty())
                 {
                     if (model_params.missing_action == Fail && !model_params.standardize_data)
                     {
@@ -496,17 +790,31 @@ void add_chosen_column(WorkerMemory &workspace, InputData &input_data, ModelPara
                     else if (!model_params.standardize_data)
                     {
                         workspace.ext_sd = 1;
-                        workspace.ext_mean[workspace.ntaken]
-                            =
-                        calc_mean_only(workspace.ix_arr.data(), workspace.st, workspace.end,
-                                     input_data.numeric_data + workspace.col_chosen * input_data.nrows);
+                        if (workspace.col_criterion != Uniformly && workspace.has_saved_stats)
+                            workspace.ext_mean[workspace.ntaken] = workspace.saved_stat1[workspace.col_chosen];
+                        else
+                        {
+                            workspace.ext_mean[workspace.ntaken]
+                                =
+                            calc_mean_only(workspace.ix_arr.data(), workspace.st, workspace.end,
+                                         input_data.numeric_data + workspace.col_chosen * input_data.nrows);
+                        }
                     }
 
                     else
                     {
-                        calc_mean_and_sd(workspace.ix_arr.data(), workspace.st, workspace.end,
-                                         input_data.numeric_data + workspace.col_chosen * input_data.nrows,
-                                         model_params.missing_action, workspace.ext_sd, workspace.ext_mean[workspace.ntaken]);
+                        if (workspace.col_criterion != Uniformly && workspace.has_saved_stats)
+                        {
+                            workspace.ext_mean[workspace.ntaken] = workspace.saved_stat1[workspace.col_chosen];
+                            workspace.ext_sd = workspace.saved_stat2[workspace.col_chosen];
+                        }
+
+                        else
+                        {
+                            calc_mean_and_sd(workspace.ix_arr.data(), workspace.st, workspace.end,
+                                             input_data.numeric_data + workspace.col_chosen * input_data.nrows,
+                                             model_params.missing_action, workspace.ext_sd, workspace.ext_mean[workspace.ntaken]);
+                        }
                     }
 
                     add_linear_comb(workspace.ix_arr.data(), workspace.st, workspace.end, workspace.comb_val.data(),
@@ -515,7 +823,7 @@ void add_chosen_column(WorkerMemory &workspace, InputData &input_data, ModelPara
                                     workspace.ext_fill_val[workspace.ntaken], model_params.missing_action,
                                     workspace.buffer_dbl.data(), workspace.buffer_szt.data(), true);
                 }
-                else if (workspace.weights_arr.size())
+                else if (!workspace.weights_arr.empty())
                 {
                     if (model_params.missing_action == Fail && !model_params.standardize_data)
                     {
@@ -526,20 +834,34 @@ void add_chosen_column(WorkerMemory &workspace, InputData &input_data, ModelPara
                     else if (!model_params.standardize_data)
                     {
                         workspace.ext_sd = 1;
-                        workspace.ext_mean[workspace.ntaken]
-                            =
-                        calc_mean_only_weighted(workspace.ix_arr.data(), workspace.st, workspace.end,
-                                                input_data.numeric_data + workspace.col_chosen * input_data.nrows,
-                                                workspace.weights_arr);
+                        if (workspace.col_criterion != Uniformly && workspace.has_saved_stats)
+                            workspace.ext_mean[workspace.ntaken] = workspace.saved_stat1[workspace.col_chosen];
+                        else
+                        {
+                            workspace.ext_mean[workspace.ntaken]
+                                =
+                            calc_mean_only_weighted(workspace.ix_arr.data(), workspace.st, workspace.end,
+                                                    input_data.numeric_data + workspace.col_chosen * input_data.nrows,
+                                                    workspace.weights_arr);
+                        }
                     }
 
                     else
                     {
-                        calc_mean_and_sd_weighted(workspace.ix_arr.data(), workspace.st, workspace.end,
-                                                  input_data.numeric_data + workspace.col_chosen * input_data.nrows,
-                                                  workspace.weights_arr,
-                                                  model_params.missing_action, workspace.ext_sd,
-                                                  workspace.ext_mean[workspace.ntaken]);
+                        if (workspace.col_criterion != Uniformly && workspace.has_saved_stats)
+                        {
+                            workspace.ext_mean[workspace.ntaken] = workspace.saved_stat1[workspace.col_chosen];
+                            workspace.ext_sd = workspace.saved_stat2[workspace.col_chosen];
+                        }
+
+                        else
+                        {
+                            calc_mean_and_sd_weighted(workspace.ix_arr.data(), workspace.st, workspace.end,
+                                                      input_data.numeric_data + workspace.col_chosen * input_data.nrows,
+                                                      workspace.weights_arr,
+                                                      model_params.missing_action, workspace.ext_sd,
+                                                      workspace.ext_mean[workspace.ntaken]);
+                        }
                     }
                     
                     add_linear_comb_weighted(workspace.ix_arr.data(), workspace.st, workspace.end, workspace.comb_val.data(),
@@ -561,20 +883,34 @@ void add_chosen_column(WorkerMemory &workspace, InputData &input_data, ModelPara
                     else if (!model_params.standardize_data)
                     {
                         workspace.ext_sd = 1;
-                        workspace.ext_mean[workspace.ntaken]
-                            =
-                        calc_mean_only_weighted(workspace.ix_arr.data(), workspace.st, workspace.end,
-                                                input_data.numeric_data + workspace.col_chosen * input_data.nrows,
-                                                workspace.weights_map);
+                        if (workspace.col_criterion != Uniformly && workspace.has_saved_stats)
+                            workspace.ext_mean[workspace.ntaken] = workspace.saved_stat1[workspace.col_chosen];
+                        else
+                        {
+                            workspace.ext_mean[workspace.ntaken]
+                                =
+                            calc_mean_only_weighted(workspace.ix_arr.data(), workspace.st, workspace.end,
+                                                    input_data.numeric_data + workspace.col_chosen * input_data.nrows,
+                                                    workspace.weights_map);
+                        }
                     }
 
                     else
                     {
-                        calc_mean_and_sd_weighted(workspace.ix_arr.data(), workspace.st, workspace.end,
-                                                  input_data.numeric_data + workspace.col_chosen * input_data.nrows,
-                                                  workspace.weights_map,
-                                                  model_params.missing_action, workspace.ext_sd,
-                                                  workspace.ext_mean[workspace.ntaken]);
+                        if (workspace.col_criterion != Uniformly && workspace.has_saved_stats)
+                        {
+                            workspace.ext_mean[workspace.ntaken] = workspace.saved_stat1[workspace.col_chosen];
+                            workspace.ext_sd = workspace.saved_stat2[workspace.col_chosen];
+                        }
+
+                        else
+                        {
+                            calc_mean_and_sd_weighted(workspace.ix_arr.data(), workspace.st, workspace.end,
+                                                      input_data.numeric_data + workspace.col_chosen * input_data.nrows,
+                                                      workspace.weights_map,
+                                                      model_params.missing_action, workspace.ext_sd,
+                                                      workspace.ext_mean[workspace.ntaken]);
+                        }
                     }
 
                     add_linear_comb_weighted(workspace.ix_arr.data(), workspace.st, workspace.end, workspace.comb_val.data(),
@@ -588,7 +924,7 @@ void add_chosen_column(WorkerMemory &workspace, InputData &input_data, ModelPara
 
             else
             {
-                if (!workspace.weights_arr.size() && !workspace.weights_map.size())
+                if (workspace.weights_arr.empty() && workspace.weights_map.empty())
                 {
                     if (model_params.missing_action == Fail && !model_params.standardize_data)
                     {
@@ -599,17 +935,31 @@ void add_chosen_column(WorkerMemory &workspace, InputData &input_data, ModelPara
                     else if (!model_params.standardize_data)
                     {
                         workspace.ext_sd = 1;
-                        workspace.ext_mean[workspace.ntaken]
-                            =
-                        calc_mean_only(workspace.ix_arr.data(), workspace.st, workspace.end, workspace.col_chosen,
-                                     input_data.Xc, input_data.Xc_ind, input_data.Xc_indptr);
+                        if (workspace.col_criterion != Uniformly && workspace.has_saved_stats)
+                            workspace.ext_mean[workspace.ntaken] = workspace.saved_stat1[workspace.col_chosen];
+                        else
+                        {
+                            workspace.ext_mean[workspace.ntaken]
+                                =
+                            calc_mean_only(workspace.ix_arr.data(), workspace.st, workspace.end, workspace.col_chosen,
+                                         input_data.Xc, input_data.Xc_ind, input_data.Xc_indptr);
+                        }
                     }
 
                     else
                     {
-                        calc_mean_and_sd(workspace.ix_arr.data(), workspace.st, workspace.end, workspace.col_chosen,
-                                         input_data.Xc, input_data.Xc_ind, input_data.Xc_indptr,
-                                         workspace.ext_sd, workspace.ext_mean[workspace.ntaken]);
+                        if (workspace.col_criterion != Uniformly && workspace.has_saved_stats)
+                        {
+                            workspace.ext_mean[workspace.ntaken] = workspace.saved_stat1[workspace.col_chosen];
+                            workspace.ext_sd = workspace.saved_stat2[workspace.col_chosen];
+                        }
+
+                        else
+                        {
+                            calc_mean_and_sd(workspace.ix_arr.data(), workspace.st, workspace.end, workspace.col_chosen,
+                                             input_data.Xc, input_data.Xc_ind, input_data.Xc_indptr,
+                                             workspace.ext_sd, workspace.ext_mean[workspace.ntaken]);
+                        }
                     }
 
                     add_linear_comb(workspace.ix_arr.data(), workspace.st, workspace.end,
@@ -620,7 +970,7 @@ void add_chosen_column(WorkerMemory &workspace, InputData &input_data, ModelPara
                                     workspace.buffer_dbl.data(), workspace.buffer_szt.data(), true);
                 }
 
-                else if (workspace.weights_arr.size())
+                else if (!workspace.weights_arr.empty())
                 {
                     if (model_params.missing_action == Fail && !model_params.standardize_data)
                     {
@@ -631,19 +981,33 @@ void add_chosen_column(WorkerMemory &workspace, InputData &input_data, ModelPara
                     else if (!model_params.standardize_data)
                     {
                         workspace.ext_sd = 1;
-                        workspace.ext_mean[workspace.ntaken]
-                            =
-                        calc_mean_only_weighted(workspace.ix_arr.data(), workspace.st, workspace.end, workspace.col_chosen,
-                                                input_data.Xc, input_data.Xc_ind, input_data.Xc_indptr,
-                                                workspace.weights_arr);
+                        if (workspace.col_criterion != Uniformly && workspace.has_saved_stats)
+                            workspace.ext_mean[workspace.ntaken] = workspace.saved_stat1[workspace.col_chosen];
+                        else
+                        {
+                            workspace.ext_mean[workspace.ntaken]
+                                =
+                            calc_mean_only_weighted(workspace.ix_arr.data(), workspace.st, workspace.end, workspace.col_chosen,
+                                                    input_data.Xc, input_data.Xc_ind, input_data.Xc_indptr,
+                                                    workspace.weights_arr);
+                        }
                     }
 
                     else
                     {
-                        calc_mean_and_sd_weighted(workspace.ix_arr.data(), workspace.st, workspace.end, workspace.col_chosen,
-                                                  input_data.Xc, input_data.Xc_ind, input_data.Xc_indptr,
-                                                  workspace.ext_sd, workspace.ext_mean[workspace.ntaken],
-                                                  workspace.weights_arr);
+                        if (workspace.col_criterion != Uniformly && workspace.has_saved_stats)
+                        {
+                            workspace.ext_mean[workspace.ntaken] = workspace.saved_stat1[workspace.col_chosen];
+                            workspace.ext_sd = workspace.saved_stat2[workspace.col_chosen];
+                        }
+
+                        else
+                        {
+                            calc_mean_and_sd_weighted(workspace.ix_arr.data(), workspace.st, workspace.end, workspace.col_chosen,
+                                                      input_data.Xc, input_data.Xc_ind, input_data.Xc_indptr,
+                                                      workspace.ext_sd, workspace.ext_mean[workspace.ntaken],
+                                                      workspace.weights_arr);
+                        }
                     }
 
                     add_linear_comb_weighted(workspace.ix_arr.data(), workspace.st, workspace.end,
@@ -666,19 +1030,33 @@ void add_chosen_column(WorkerMemory &workspace, InputData &input_data, ModelPara
                     else if (!model_params.standardize_data)
                     {
                         workspace.ext_sd = 1;
-                        workspace.ext_mean[workspace.ntaken]
-                            =
-                        calc_mean_only_weighted(workspace.ix_arr.data(), workspace.st, workspace.end, workspace.col_chosen,
-                                                input_data.Xc, input_data.Xc_ind, input_data.Xc_indptr,
-                                                workspace.weights_map);
+                        if (workspace.col_criterion != Uniformly && workspace.has_saved_stats)
+                            workspace.ext_mean[workspace.ntaken] = workspace.saved_stat1[workspace.col_chosen];
+                        else
+                        {
+                            workspace.ext_mean[workspace.ntaken]
+                                =
+                            calc_mean_only_weighted(workspace.ix_arr.data(), workspace.st, workspace.end, workspace.col_chosen,
+                                                    input_data.Xc, input_data.Xc_ind, input_data.Xc_indptr,
+                                                    workspace.weights_map);
+                        }
                     }
 
                     else
                     {
-                        calc_mean_and_sd_weighted(workspace.ix_arr.data(), workspace.st, workspace.end, workspace.col_chosen,
-                                                  input_data.Xc, input_data.Xc_ind, input_data.Xc_indptr,
-                                                  workspace.ext_sd, workspace.ext_mean[workspace.ntaken],
-                                                  workspace.weights_map);
+                        if (workspace.col_criterion != Uniformly && workspace.has_saved_stats)
+                        {
+                            workspace.ext_mean[workspace.ntaken] = workspace.saved_stat1[workspace.col_chosen];
+                            workspace.ext_sd = workspace.saved_stat2[workspace.col_chosen];
+                        }
+
+                        else
+                        {
+                            calc_mean_and_sd_weighted(workspace.ix_arr.data(), workspace.st, workspace.end, workspace.col_chosen,
+                                                      input_data.Xc, input_data.Xc_ind, input_data.Xc_indptr,
+                                                      workspace.ext_sd, workspace.ext_mean[workspace.ntaken],
+                                                      workspace.weights_map);
+                        }
                     }
                     
                     add_linear_comb_weighted(workspace.ix_arr.data(), workspace.st, workspace.end,
@@ -703,7 +1081,7 @@ void add_chosen_column(WorkerMemory &workspace, InputData &input_data, ModelPara
                 {
                     workspace.chosen_cat[workspace.ntaken] = choose_cat_from_present(workspace, input_data, workspace.col_chosen);
                     workspace.ext_fill_new[workspace.ntaken] = workspace.coef_norm(workspace.rnd_generator);
-                    if (!workspace.weights_arr.size() && !workspace.weights_map.size())
+                    if (workspace.weights_arr.empty() && workspace.weights_map.empty())
                     {
                         add_linear_comb(workspace.ix_arr.data(), workspace.st, workspace.end, workspace.comb_val.data(),
                                         input_data.categ_data + workspace.col_chosen * input_data.nrows,
@@ -714,7 +1092,7 @@ void add_chosen_column(WorkerMemory &workspace, InputData &input_data, ModelPara
                                         NULL, NULL, model_params.new_cat_action, model_params.missing_action, SingleCateg, true);
                     }
 
-                    else if (workspace.weights_arr.size())
+                    else if (!workspace.weights_arr.empty())
                     {
                         add_linear_comb_weighted(workspace.ix_arr.data(), workspace.st, workspace.end, workspace.comb_val.data(),
                                                  input_data.categ_data + workspace.col_chosen * input_data.nrows,
@@ -769,7 +1147,7 @@ void add_chosen_column(WorkerMemory &workspace, InputData &input_data, ModelPara
                             workspace.ext_cat_coef[workspace.ntaken][ix] = workspace.buffer_dbl[sorted_ix[ix]];
                     }
 
-                    if (!workspace.weights_arr.size() && !workspace.weights_map.size())
+                    if (workspace.weights_arr.empty() && workspace.weights_map.empty())
                     {
                         add_linear_comb(workspace.ix_arr.data(), workspace.st, workspace.end, workspace.comb_val.data(),
                                         input_data.categ_data + workspace.col_chosen * input_data.nrows,
@@ -780,7 +1158,7 @@ void add_chosen_column(WorkerMemory &workspace, InputData &input_data, ModelPara
                                         model_params.new_cat_action, model_params.missing_action, SubSet, true);
                     }
 
-                    else if (workspace.weights_arr.size())
+                    else if (!workspace.weights_arr.empty())
                     {
                         add_linear_comb_weighted(workspace.ix_arr.data(), workspace.st, workspace.end, workspace.comb_val.data(),
                                                  input_data.categ_data + workspace.col_chosen * input_data.nrows,

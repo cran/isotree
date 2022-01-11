@@ -20,17 +20,20 @@
 CSC/dgCMatrix supported for distance and outlierness, CSR/dgRMatrix supported for outlierness and imputations)
 for which to predict outlierness, distance, or imputations of missing values.
 
-Note that, if using sparse matrices from package `Matrix`, converting to `dgRMatrix` (when required) might require using
-`as(m, "RsparseMatrix")` instead of `dgRMatrix` directly.
-Nevertheless, if `newdata` is sparse and one wants to obtain the outlier score or average depth or tree
+If `newdata` is sparse and one wants to obtain the outlier score or average depth or tree
 numbers, it's highly recommended to pass it in CSC (`dgCMatrix`) format as it will be much faster
 when the number of trees or rows is large.}
 
 \item{type}{Type of prediction to output. Options are:
 \itemize{
-  \item `"score"` for the standardized outlier score, where values closer to 1 indicate more outlierness, while values
+  \item `"score"` for the standardized outlier score - for isolation-based metrics (the default), values
+  closer to 1 indicate more outlierness, while values
   closer to 0.5 indicate average outlierness, and close to 0 more averageness (harder to isolate).
-  \item `"avg_depth"` for  the non-standardized average isolation depth.
+  For all scoring metrics, higher values indicate more outlierness.
+  \item `"avg_depth"` for  the non-standardized average isolation depth or density or log-density. For `scoring_metric="density"`,
+  will output the geometric mean instead. See the documentation for `scoring_metric` for more details
+  about the calculations for density-based metrics.
+  For all scoring metrics, higher values indicate less outlierness.
   \item `"dist"` for approximate pairwise or between-points distances (must pass more than 1 row) - these are
   standardized in the same way as outlierness, values closer to zero indicate nearer points,
   closer to one further away points, and closer to 0.5 average distance.
@@ -38,13 +41,15 @@ when the number of trees or rows is large.}
   \item `"tree_num"` for the terminal node number for each tree - if choosing this option,
   will return a list containing both the average isolation depth and the terminal node numbers, under entries
   `avg_depth` and `tree_num`, respectively.
-  \item `"tree_depths"` for the non-standardized isolation depth or expected isolation depth for each tree
-  (note that they will not include range penalties from `penalize_range=TRUE`).
+  \item `"tree_depths"` for the non-standardized isolation depth or expected isolation depth or density
+  or log-density for each tree (note that they will not include range penalties from `penalize_range=TRUE`).
+  See the documentation for `scoring_metric` for more details about the calculations for density-based metrics.
   \item `"impute"` for imputation of missing values in `newdata`.
 }}
 
 \item{square_mat}{When passing `type` = `"dist` or `"avg_sep"` with no `refdata`, whether to return a
-just the upper-triangular part (returned as a `dist` object and compatible with functions such as `hclust`),
+full square matrix (returned as a numeric `matrix` object) or
+just its upper-triangular part (returned as a `dist` object and compatible with functions such as `hclust`),
 in which the entry for pair (i,j) with 1 <= i < j <= n is located at position
 p(i, j) = ((i - 1) * (n - i/2) + j - i).
 Ignored when not predicting distance/separation or when passing `refdata`.}
@@ -76,7 +81,8 @@ part of a square matrix
 Predict method for Isolation Forest
 }
 \details{
-The standardized outlier score is calculated according to the original paper's formula:
+The standardized outlier score for isolation-based metrics is calculated according to the
+original paper's formula:
 \eqn{  2^{ - \frac{\bar{d}}{c(n)}  }  }{2^(-avg(depth)/c(nobs))}, where
 \eqn{\bar{d}}{avg(depth)} is the average depth under each tree at which an observation
 becomes isolated (a remainder is extrapolated if the actual terminal node is not isolated),
@@ -85,9 +91,14 @@ and \eqn{c(n)}{c(nobs)} is the expected isolation depth if observations were uni
 of \eqn{c(n)}{c(nobs)} however differs from the paper as this package uses more exact procedures
 for calculation of harmonic numbers.
 
-The distribution of outlier scores should be centered around 0.5, unless using non-random splits (parameters
-`prob_pick_avg_gain`, `prob_pick_pooled_gain`, `prob_split_avg_gain`, `prob_split_pooled_gain`)
-and/or range penalizations, or having distributions which are too skewed.
+For density-based matrics, see the documentation for `scoring_metric` in \link{isolation.forest} for
+details about the score calculations.
+
+The distribution of outlier scores for isolation-based metrics should be centered around 0.5, unless
+using non-random splits (parameters `prob_pick_avg_gain`, `prob_pick_pooled_gain`)
+and/or range penalizations, or having distributions which are too skewed. For `scoring_metric="density"`,
+most of the values should be negative, and while zero can be used as a natural score threshold,
+the scores are unlikely to be centered around zero.
 
 The more threads that are set for the model, the higher the memory requirement will be as each
 thread will allocate an array with one entry per row (outlierness) or combination (distance).
@@ -112,6 +123,12 @@ can be small differences between runs due to roundoff error.
 
 When imputing missing values, the input may contain new columns (i.e. not present when the model was fitted),
 which will be output as-is.
+
+If passing `type="dist"` or `type="avg_sep"`, while in theory it should be possible to make such
+computations relatively fast by precomputing
+results for each pair of terminal nodes in a given tree, the procedure here is based on
+calculating this metric on-the-fly as each pair of observations is passed down a tree, which
+makes it relatively slow, and thus not recommended for real-time usage.
 }
 \section{Model serving considerations}{
 
@@ -124,6 +141,16 @@ needed or to hang too. A potential fix in these cases is to set the number of th
 (e.g. `model$nthreads <- 1L`), or to use a different version of this library compiled without OpenMP
 (requires manually altering the `Makevars` file), or to use a non-GNU OpenMP backend. This should not
 be an issue when using this library normally in e.g. an RStudio session.
+
+In order to make model objects serializable (i.e. usable with `save`, `saveRDS`, and similar), these model
+objects keep serialized raw bytes from which their underlying heap-allocated C++ object (which does not
+survive serializations) can be reconstructed. For model serving, one would usually want to drop these
+serialized bytes after having loaded a model through `readRDS` or similar (note that reconstructing the
+C++ object will first require calling \link{isotree.restore.handle}, which is done automatically when
+calling `predict` and similar), as they can increase memory usage by a large amount. These redundant raw bytes
+can be dropped as follows: `model$cpp_obj$serialized <- NULL` (and an additional
+`model$cpp_obj$imp_ser <- NULL` when using `build_imputer=TRUE`). After that, one might want to force garbage
+collection through `gc()`.
 }
 
 \seealso{

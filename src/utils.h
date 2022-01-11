@@ -18,11 +18,25 @@
 *     [5] https://sourceforge.net/projects/iforest/
 *     [6] https://math.stackexchange.com/questions/3388518/expected-number-of-paths-required-to-separate-elements-in-a-binary-tree
 *     [7] Quinlan, J. Ross. C4. 5: programs for machine learning. Elsevier, 2014.
-*     [8] Cortes, David. "Distance approximation using Isolation Forests." arXiv preprint arXiv:1910.12362 (2019).
-*     [9] Cortes, David. "Imputing missing values with unsupervised random trees." arXiv preprint arXiv:1911.06646 (2019).
+*     [8] Cortes, David.
+*         "Distance approximation using Isolation Forests."
+*         arXiv preprint arXiv:1910.12362 (2019).
+*     [9] Cortes, David.
+*         "Imputing missing values with unsupervised random trees."
+*         arXiv preprint arXiv:1911.06646 (2019).
+*     [10] https://math.stackexchange.com/questions/3333220/expected-average-depth-in-random-binary-tree-constructed-top-to-bottom
+*     [11] Cortes, David.
+*          "Revisiting randomized choices in isolation forests."
+*          arXiv preprint arXiv:2110.13402 (2021).
+*     [12] Guha, Sudipto, et al.
+*          "Robust random cut forest based anomaly detection on streams."
+*          International conference on machine learning. PMLR, 2016.
+*     [13] Cortes, David.
+*          "Isolation forests: looking beyond tree depth."
+*          arXiv preprint arXiv:2111.11639 (2021).
 * 
 *     BSD 2-Clause License
-*     Copyright (c) 2019-2021, David Cortes
+*     Copyright (c) 2019-2022, David Cortes
 *     All rights reserved.
 *     Redistribution and use in source and binary forms, with or without
 *     modification, are permitted provided that the following conditions are met:
@@ -48,7 +62,7 @@
    https://stackoverflow.com/questions/2589096/find-most-significant-bit-left-most-that-is-set-in-a-bit-array
    https://stackoverflow.com/questions/11376288/fast-computing-of-log2-for-64-bit-integers  */
 #if SIZE_MAX == UINT32_MAX /* 32-bit systems */
-    constexpr static const int MultiplyDeBruijnBitPosition[32] =
+    constexpr static const uint32_t MultiplyDeBruijnBitPosition[32] =
     {
         0, 9,  1,  10, 13, 21, 2, 29, 11, 14, 16, 18, 22, 25, 3, 30,
         8, 12, 20, 28, 15, 17, 24, 7, 19, 27, 23, 6,  26, 5,  4, 31
@@ -86,8 +100,28 @@
         value |= value >> 32;
         return tab64[((uint64_t)((value - (value >> 1))*0x07EDD5E59A4E28C2)) >> 58] + 1;
     }
-#else /* other architectures - might not be entirely precise, and will be slower */
-    size_t log2ceil(size_t x) {return (size_t)(std::ceil(std::log2((long double) x)));}
+#else /* other architectures - might be much slower */
+    #if (__cplusplus  >= 202002L)
+    #include <bit>
+    size_t log2ceil(size_t value)
+    {
+        size_t out = std::numeric_limits<size_t>::digits - std::countl_zero(value);
+        out -= (value == ((size_t)1 << (out-1)));
+        return out;
+    }
+    #else
+    size_t log2ceil(size_t value)
+    {
+        size_t value_ = value;
+        size_t out = 0;
+        while (value >= 1) {
+            value = value >> 1;
+            out++;
+        }
+        out -= (value_ == ((size_t)1 << (out-1)));
+        return out;
+    }
+    #endif
 #endif
 
 #define THRESHOLD_EXACT_H 256 /* above this will get approximated */
@@ -118,7 +152,7 @@ double digamma(double x)
         y = 0.0;
     }
 
-    y = std::log(x)  -  (0.5/x)  -  y;
+    y = ((-0.5/x) - y) + std::log(x);
     return y;
 }
 
@@ -128,13 +162,17 @@ double digamma(double x)
 double harmonic(size_t n)
 {
     if (n > THRESHOLD_EXACT_H)
-        return std::log((long double)n) + (long double)EULERS_GAMMA
-                + 0.5 * (1./(long double)n)
-                - 0.5 * (1./square((long double)n))
-                      * ( 1./6. -   (1./square((long double)n))
-                                  * (1./60. - (1./126.)*(1./square((long double)n))) );
+    {
+        long double temp = 1.0l / square((long double)n);
+        return  - 0.5l * temp * ( 1.0l/6.0l  -   temp * (1.0l/60.0l - (1.0l/126.0l)*temp) )
+                + 0.5l * (1.0l/(long double)n)
+                + std::log((long double)n) + (long double)EULERS_GAMMA;
+    }
+    
     else
+    {
         return harmonic_recursive((double)1, (double)(n + 1));
+    }
 }
 
 double harmonic_recursive(double a, double b)
@@ -173,12 +211,12 @@ double expected_avg_depth(long double approx_sample_size)
         return 0;
     else if (approx_sample_size < (long double)INT32_MAX)
         return 2. * (digamma(approx_sample_size + 1.) + EULERS_GAMMA - 1.);
-    else
-        return 2. * std::log(approx_sample_size) + 2.*((long double)EULERS_GAMMA - 1.)
-                + (1./approx_sample_size)
-                - (1./square(approx_sample_size))
-                   * ( 1./6. -   (1./square(approx_sample_size))
-                               * (1./60. - (1./126.)*(1./square(approx_sample_size))) );
+    else {
+        long double temp = 1.0l / square(approx_sample_size);
+        return 2.0l * std::log(approx_sample_size) + 2.0l*((long double)EULERS_GAMMA - 1.0l)
+               + (1.0l/approx_sample_size)
+               - temp * ( 1.0l/6.0l -   temp * (1.0l/60.0l - (1.0l/126.0l)*temp) );
+    }
 }
 
 /* https://math.stackexchange.com/questions/3388518/expected-number-of-paths-required-to-separate-elements-in-a-binary-tree */
@@ -405,12 +443,12 @@ void tmat_to_dense(double *restrict tmat, double *restrict dmat, size_t n, bool 
 
 template <class real_t>
 void build_btree_sampler(std::vector<double> &btree_weights, real_t *restrict sample_weights,
-                         size_t nrows, size_t &log2_n, size_t &btree_offset)
+                         size_t nrows, size_t &restrict log2_n, size_t &restrict btree_offset)
 {
     /* build a perfectly-balanced binary search tree in which each node will
        hold the sum of the weights of its children */
     log2_n = log2ceil(nrows);
-    if (!btree_weights.size())
+    if (btree_weights.empty())
         btree_weights.resize(pow2(log2_n + 1), 0);
     else
         btree_weights.assign(btree_weights.size(), 0);
@@ -431,9 +469,9 @@ void build_btree_sampler(std::vector<double> &btree_weights, real_t *restrict sa
 }
 
 template <class real_t>
-void sample_random_rows(std::vector<size_t> &ix_arr, size_t nrows, bool with_replacement,
-                        RNG_engine &rnd_generator, std::vector<size_t> &ix_all,
-                        real_t sample_weights[], std::vector<double> &btree_weights,
+void sample_random_rows(std::vector<size_t> &restrict ix_arr, size_t nrows, bool with_replacement,
+                        RNG_engine &rnd_generator, std::vector<size_t> &restrict ix_all,
+                        real_t *restrict sample_weights, std::vector<double> &restrict btree_weights,
                         size_t log2_n, size_t btree_offset, std::vector<bool> &is_repeated)
 {
     size_t ntake = ix_arr.size();
@@ -511,7 +549,7 @@ void sample_random_rows(std::vector<size_t> &ix_arr, size_t nrows, bool with_rep
         if (ntake >= (nrows / 2))
         {
 
-            if (!ix_all.size())
+            if (ix_all.empty())
                 ix_all.resize(nrows);
 
             /* in order for random seeds to always be reproducible, don't re-use previous shuffles */
@@ -549,7 +587,7 @@ void sample_random_rows(std::vector<size_t> &ix_arr, size_t nrows, bool with_rep
             if (((long double)ntake / (long double)nrows) > (1. / 50.))
             {
 
-                if (!is_repeated.size())
+                if (is_repeated.empty())
                     is_repeated.resize(nrows, false);
                 else
                     is_repeated.assign(is_repeated.size(), false);
@@ -681,7 +719,7 @@ void ColumnSampler::initialize(real_t weights[], size_t n_cols)
 {
     this->n_cols = n_cols;
     this->tree_levels = log2ceil(n_cols);
-    if (!this->tree_weights.size())
+    if (this->tree_weights.empty())
         this->tree_weights.resize(pow2(this->tree_levels + 1), 0);
     else {
         if (this->tree_weights.size() != pow2(this->tree_levels + 1))
@@ -715,7 +753,7 @@ void ColumnSampler::drop_weights()
 
 bool ColumnSampler::has_weights()
 {
-    return this->tree_weights.size() > 0;
+    return !this->tree_weights.empty();
 }
 
 void ColumnSampler::initialize(size_t n_cols)
@@ -822,11 +860,32 @@ void ColumnSampler::leave_m_cols(size_t m, RNG_engine &rnd_generator)
     }
 }
 
-void ColumnSampler::drop_col(size_t col)
+void ColumnSampler::drop_col(size_t col, size_t nobs_left)
 {
     if (!this->has_weights())
     {
-        std::swap(this->col_indices[this->last_given], this->col_indices[--this->curr_pos]);
+        if (this->col_indices[this->last_given] == col)
+        {
+            std::swap(this->col_indices[this->last_given], this->col_indices[--this->curr_pos]);
+        }
+
+        else if (this->curr_pos > 4*nobs_left)
+        {
+            return;
+        }
+
+        else
+        {
+            for (size_t ix = 0; ix < this->curr_pos; ix++)
+            {
+                if (this->col_indices[ix] == col)
+                {
+                    std::swap(this->col_indices[ix], this->col_indices[--this->curr_pos]);
+                    break;
+                }
+            }
+        }
+
         if (this->curr_col) this->curr_col--;
     }
 
@@ -842,6 +901,18 @@ void ColumnSampler::drop_col(size_t col)
                                           + this->tree_weights[ix_child(curr_ix) + 1];
         }
     }
+}
+
+void ColumnSampler::drop_col(size_t col)
+{
+    this->drop_col(col, SIZE_MAX);
+}
+
+/* to be used exclusively when initializing the density calculator,
+   and only when 'col_indices' is a straight range with no dropped columns */
+void ColumnSampler::drop_from_tail(size_t col)
+{
+    std::swap(this->col_indices[col], this->col_indices[--this->curr_pos]);
 }
 
 void ColumnSampler::prepare_full_pass()
@@ -971,7 +1042,6 @@ void ColumnSampler::shuffle_remainder(RNG_engine &rnd_generator)
     }
 }
 
-
 size_t ColumnSampler::get_remaining_cols()
 {
     if (!this->has_weights())
@@ -980,6 +1050,1122 @@ size_t ColumnSampler::get_remaining_cols()
         return this->n_cols - this->n_dropped;
 }
 
+bool SingleNodeColumnSampler::initialize
+(
+    double *restrict weights,
+    std::vector<size_t> *col_indices,
+    size_t curr_pos,
+    size_t n_sample,
+    bool backup_weights
+)
+{
+    if (!curr_pos) return false;
+
+    this->col_indices = col_indices->data();
+    this->curr_pos = curr_pos;
+    this->n_left = this->curr_pos;
+    this->weights_orig = weights;
+    
+    if (n_sample > std::max(log2ceil(this->curr_pos), (size_t)3))
+    {
+        this->using_tree = true;
+        this->backup_weights = false;
+
+        if (this->used_weights.empty()) {
+            this->used_weights.reserve(col_indices->size());
+            this->mapped_indices.reserve(col_indices->size());
+            this->tree_weights.reserve(2 * col_indices->size());
+        }
+
+        this->used_weights.resize(this->curr_pos);
+        this->mapped_indices.resize(this->curr_pos);
+
+        for (size_t col = 0; col < this->curr_pos; col++) {
+            this->mapped_indices[col] = this->col_indices[col];
+            this->used_weights[col] = weights[this->col_indices[col]];
+            if (!weights[this->col_indices[col]]) this->n_left--;
+        }
+
+        this->tree_weights.resize(0);
+        build_btree_sampler(this->tree_weights, this->used_weights.data(),
+                            this->curr_pos, this->tree_levels, this->offset);
+
+        this->n_inf = 0;
+        if (std::isinf(this->tree_weights[0]))
+        {
+            if (this->mapped_inf_indices.empty())
+                this->mapped_inf_indices.resize(this->curr_pos);
+
+            for (size_t col = 0; col < this->curr_pos; col++)
+            {
+                if (std::isinf(weights[this->col_indices[col]]))
+                {
+                    this->mapped_inf_indices[this->n_inf++] = this->col_indices[col];
+                    weights[this->col_indices[col]] = 0;
+                }
+
+                else
+                {
+                    this->mapped_indices[col - this->n_inf] = this->col_indices[col];
+                    this->used_weights[col - this->n_inf] = weights[this->col_indices[col]];
+                }
+            }
+
+            this->tree_weights.resize(0);
+            build_btree_sampler(this->tree_weights, this->used_weights.data(),
+                                this->curr_pos - this->n_inf, this->tree_levels, this->offset);
+        }
+
+        this->used_weights.resize(0);
+
+        if (this->tree_weights[0] <= 0 && !this->n_inf)
+            return false;
+    }
+
+    else
+    {
+        this->using_tree = false;
+        this->backup_weights = backup_weights;
+
+        if (this->backup_weights)
+        {
+            if (this->weights_own.empty())
+                this->weights_own.resize(col_indices->size());
+            this->weights_own.assign(weights, weights + this->curr_pos);
+        }
+
+        this->cumw = 0;
+        for (size_t col = 0; col < this->curr_pos; col++) {
+            this->cumw += weights[this->col_indices[col]];
+            if (!weights[this->col_indices[col]]) this->n_left--;
+        }
+
+        if (std::isnan(this->cumw))
+            throw std::runtime_error("NAs encountered. Try using a different value for 'missing_action'.\n");
+
+        /* if it's infinite, will choose among columns with infinite weight first */
+        this->n_inf = 0;
+        if (std::isinf(this->cumw))
+        {
+            if (this->inifinite_weights.empty())
+                this->inifinite_weights.resize(col_indices->size());
+            else
+                this->inifinite_weights.assign(col_indices->size(), false);
+
+            this->cumw = 0;
+            for (size_t col = 0; col < this->curr_pos; col++)
+            {
+                if (std::isinf(weights[this->col_indices[col]])) {
+                    this->n_inf++;
+                    this->inifinite_weights[this->col_indices[col]] = true;
+                    weights[this->col_indices[col]] = 0;
+                }
+
+                else {
+                    this->cumw += weights[this->col_indices[col]];
+                }
+            }
+        }
+
+        if (!this->cumw && !this->n_inf) return false;
+    }
+
+    return true;
+}
+
+bool SingleNodeColumnSampler::sample_col(size_t &col_chosen, RNG_engine &rnd_generator)
+{
+    if (!this->using_tree)
+    {
+        if (this->backup_weights)
+            this->weights_orig = this->weights_own.data();
+
+        /* if there's infinites, choose uniformly at random from them */
+        if (this->n_inf)
+        {
+            size_t chosen = std::uniform_int_distribution<size_t>(0, this->n_inf-1)(rnd_generator);
+            size_t curr = 0;
+            for (size_t col = 0; col < this->curr_pos; col++)
+            {
+                curr += inifinite_weights[this->col_indices[col]];
+                if (curr == chosen)
+                {
+                    col_chosen = this->col_indices[col];
+                    this->n_inf--;
+                    this->inifinite_weights[col_chosen] = false;
+                    this->n_left--;
+                    return true;
+                }
+            }
+            assert(0);
+        }
+
+        if (!this->n_left) return false;
+
+        /* due to the way this is calculated, there can be large roundoff errors and even negatives */
+        if (this->cumw <= 0)
+        {
+            this->cumw = 0;
+            for (size_t col = 0; col < this->curr_pos; col++)
+                this->cumw += this->weights_orig[this->col_indices[col]];
+            if (this->cumw <= 0)
+                unexpected_error();
+        }
+
+        /* if there are no infinites, choose a column according to weight */
+        ldouble_safe chosen = std::uniform_real_distribution<ldouble_safe>((ldouble_safe)0, this->cumw)(rnd_generator);
+        ldouble_safe cumw_ = 0;
+        for (size_t col = 0; col < this->curr_pos; col++)
+        {
+            cumw_ += this->weights_orig[this->col_indices[col]];
+            if (cumw_ >= chosen)
+            {
+                col_chosen = this->col_indices[col];
+                this->cumw -= this->weights_orig[col_chosen];
+                this->weights_orig[col_chosen] = 0;
+                this->n_left--;
+                return true;
+            }
+        }
+        col_chosen = this->col_indices[this->curr_pos-1];
+        this->cumw -= this->weights_orig[col_chosen];
+        this->weights_orig[col_chosen] = 0;
+        this->n_left--;
+        return true;
+    }
+
+    else
+    {
+        /* if there's infinites, choose uniformly at random from them */
+        if (this->n_inf)
+        {
+            size_t chosen = std::uniform_int_distribution<size_t>(0, this->n_inf-1)(rnd_generator);
+            col_chosen = this->mapped_inf_indices[chosen];
+            std::swap(this->mapped_inf_indices[chosen], this->mapped_inf_indices[--this->n_inf]);
+            this->n_left--;
+            return true;
+        }
+
+        else
+        {
+            /* TODO: should standardize all these tree traversals into one.
+               This one in particular could do with sampling only a single
+               random number as it will not typically require exhausting all
+               options like the usual column sampler. */
+            if (!this->n_left) return false;
+            size_t curr_ix = 0;
+            double rnd_subrange, w_left;
+            double curr_subrange = this->tree_weights[0];
+            if (curr_subrange <= 0)
+                return false;
+
+            for (size_t lev = 0; lev < tree_levels; lev++)
+            {
+                rnd_subrange = std::uniform_real_distribution<double>(0., curr_subrange)(rnd_generator);
+                w_left = this->tree_weights[ix_child(curr_ix)];
+                curr_ix = ix_child(curr_ix) + (rnd_subrange >= w_left);
+                curr_subrange = this->tree_weights[curr_ix];
+            }
+
+            col_chosen = this->mapped_indices[curr_ix - this->offset];
+
+            this->tree_weights[curr_ix] = 0.;
+            for (size_t lev = 0; lev < this->tree_levels; lev++)
+            {
+                curr_ix = ix_parent(curr_ix);
+                this->tree_weights[curr_ix] =   this->tree_weights[ix_child(curr_ix)]
+                                              + this->tree_weights[ix_child(curr_ix) + 1];
+            }
+            
+            this->n_left--;
+            return true;
+        }
+    }
+}
+
+void SingleNodeColumnSampler::backup(SingleNodeColumnSampler &other, size_t ncols_tot)
+{
+    other.n_inf = this->n_inf;
+    other.n_left = this->n_left;
+    other.using_tree = this->using_tree;
+
+    if (this->using_tree)
+    {
+        if (other.tree_weights.empty())
+        {
+            other.tree_weights.reserve(ncols_tot);
+            other.mapped_inf_indices.reserve(ncols_tot);
+        }
+        other.tree_weights.assign(this->tree_weights.begin(), this->tree_weights.end());
+        other.mapped_inf_indices.assign(this->mapped_inf_indices.begin(), this->mapped_inf_indices.end());
+    }
+
+    else
+    {
+        other.cumw = this->cumw;
+        if (this->backup_weights)
+        {
+            if (other.weights_own.empty())
+                other.weights_own.reserve(ncols_tot);
+            
+            other.weights_own.resize(this->n_left);
+            for (size_t col = 0; col < this->n_left; col++)
+                other.weights_own[col] = this->weights_own[this->col_indices[col]];
+        }
+
+        if (this->inifinite_weights.size())
+        {
+            if (other.inifinite_weights.empty())
+                other.inifinite_weights.reserve(ncols_tot);
+
+            other.inifinite_weights.resize(this->n_left);
+            for (size_t col = 0; col < this->n_left; col++)
+                other.inifinite_weights[col] = this->inifinite_weights[this->col_indices[col]];
+        }
+    }
+}
+
+void SingleNodeColumnSampler::restore(const SingleNodeColumnSampler &other)
+{
+    this->n_inf = other.n_inf;
+    this->n_left = other.n_left;
+    this->using_tree = other.using_tree;
+
+    if (this->using_tree)
+    {
+        this->tree_weights.assign(other.tree_weights.begin(), other.tree_weights.end());
+        this->mapped_inf_indices.assign(other.mapped_inf_indices.begin(), other.mapped_inf_indices.end());
+    }
+
+    else
+    {
+        this->cumw = other.cumw;
+        if (this->backup_weights)
+        {
+            for (size_t col = 0; col < this->n_left; col++)
+                this->weights_own[this->col_indices[col]] = other.weights_own[col];
+        }
+
+        if (this->inifinite_weights.size())
+        {
+            for (size_t col = 0; col < this->n_left; col++)
+                this->inifinite_weights[this->col_indices[col]] = other.inifinite_weights[col];
+        }
+    }
+}
+
+
+void DensityCalculator::initialize(size_t max_depth, int max_categ, bool reserve_counts, ScoringMetric scoring_metric)
+{
+    this->multipliers.reserve(max_depth+3);
+    this->multipliers.clear();
+    if (scoring_metric != AdjDensity)
+        this->multipliers.push_back(0);
+    else
+        this->multipliers.push_back(1);
+
+    if (reserve_counts)
+    {
+        this->counts.resize(max_categ);
+    }
+}
+
+template <class InputData>
+void DensityCalculator::initialize_bdens(const InputData &input_data,
+                                         const ModelParams &model_params,
+                                         std::vector<size_t> &ix_arr,
+                                         ColumnSampler &col_sampler)
+{
+    this->fast_bratio = model_params.fast_bratio;
+    if (this->fast_bratio)
+    {
+        this->multipliers.reserve(model_params.max_depth + 3);
+        this->multipliers.push_back(0);
+    }
+
+    if (input_data.range_low != NULL || input_data.ncat_ != NULL)
+    {
+        if (input_data.ncols_numeric)
+        {
+            this->queue_box.reserve(model_params.max_depth+3);
+            this->box_low.assign(input_data.range_low, input_data.range_low + input_data.ncols_numeric);
+            this->box_high.assign(input_data.range_high, input_data.range_high + input_data.ncols_numeric);
+        }
+
+        if (input_data.ncols_categ)
+        {
+            this->queue_ncat.reserve(model_params.max_depth+2);
+            this->ncat.assign(input_data.ncat_, input_data.ncat_ + input_data.ncols_categ);
+        }
+
+        if (!this->fast_bratio)
+        {
+            if (input_data.ncols_numeric)
+            {
+                this->ranges.resize(input_data.ncols_numeric);
+                for (size_t col = 0; col < input_data.ncols_numeric; col++)
+                    this->ranges[col] = this->box_high[col] - this->box_low[col];
+            }
+
+            if (input_data.ncols_categ)
+            {
+                this->ncat_orig = this->ncat;
+            }
+        }
+
+        return;
+    }
+
+    if (input_data.ncols_numeric)
+    {
+        this->queue_box.reserve(model_params.max_depth+3);
+        this->box_low.resize(input_data.ncols_numeric);
+        this->box_high.resize(input_data.ncols_numeric);
+        if (!this->fast_bratio)
+            this->ranges.resize(input_data.ncols_numeric);
+    }
+    if (input_data.ncols_categ)
+    {
+        this->queue_ncat.reserve(model_params.max_depth+2);
+    }
+    bool unsplittable = false;
+    
+    size_t npresent = 0;
+    std::vector<signed char> categ_present;
+    if (input_data.ncols_categ)
+    {
+        categ_present.resize(input_data.max_categ);
+    }
+
+
+    col_sampler.prepare_full_pass();
+    size_t col;
+    while (col_sampler.sample_col(col))
+    {
+        if (col < input_data.ncols_numeric)
+        {
+            if (input_data.Xc_indptr != NULL)
+            {
+                get_range((size_t*)ix_arr.data(), (size_t)0, ix_arr.size()-(size_t)1, col,
+                          input_data.Xc, input_data.Xc_ind, input_data.Xc_indptr,
+                          model_params.missing_action, this->box_low[col], this->box_high[col], unsplittable);
+            }
+
+            else
+            {
+                get_range((size_t*)ix_arr.data(), input_data.numeric_data + input_data.nrows * col, (size_t)0, ix_arr.size()-(size_t)1,
+                          model_params.missing_action, this->box_low[col], this->box_high[col], unsplittable);
+            }
+
+
+            if (unsplittable)
+            {
+                this->box_low[col] = 0;
+                this->box_high[col] = 0;
+                if (!this->fast_bratio)
+                    this->ranges[col] = 0;
+                col_sampler.drop_col(col);
+            }
+
+            if (!this->fast_bratio)
+            {
+                this->ranges[col] = (ldouble_safe)this->box_high[col] - (ldouble_safe)this->box_low[col];
+                this->ranges[col] = std::fmax(this->ranges[col], (ldouble_safe)0);
+            }
+        }
+
+        else
+        {
+            get_categs((size_t*)ix_arr.data(),
+                       input_data.categ_data + input_data.nrows * (col - input_data.ncols_numeric),
+                       (size_t)0, ix_arr.size()-(size_t)1, input_data.ncat[col],
+                       model_params.missing_action, categ_present.data(), npresent, unsplittable);
+
+            if (unsplittable)
+            {
+                this->ncat[col - input_data.ncols_numeric] = 1;
+                col_sampler.drop_col(col);
+            }
+
+            else
+            {
+                this->ncat[col - input_data.ncols_numeric] = npresent;
+            }
+        }
+    }
+
+    if (!this->fast_bratio)
+        this->ncat_orig = this->ncat;
+}
+
+template <class InputData>
+void DensityCalculator::initialize_bdens_ext(const InputData &input_data,
+                                             const ModelParams &model_params,
+                                             std::vector<size_t> &ix_arr,
+                                             ColumnSampler &col_sampler,
+                                             bool col_sampler_is_fresh)
+{
+    this->vals_ext_box.reserve(model_params.max_depth + 3);
+    this->queue_ext_box.reserve(model_params.max_depth + 3);
+    this->vals_ext_box.push_back(0);
+
+    if (input_data.range_low != NULL)
+    {
+        this->box_low.assign(input_data.range_low, input_data.range_low + input_data.ncols_numeric);
+        this->box_high.assign(input_data.range_high, input_data.range_high + input_data.ncols_numeric);
+        return;
+    }
+
+    this->box_low.resize(input_data.ncols_numeric);
+    this->box_high.resize(input_data.ncols_numeric);
+    bool unsplittable = false;
+
+    /* TODO: find out if there's an optimal point for choosing one or the other loop
+       when using 'leave_m_cols' and when using 'prob_pick_col_by_range', then fill in the
+       lines that are commented out. */
+    // if (!input_data.ncols_categ || model_params.ncols_per_tree < input_data.ncols_numeric)
+    if (input_data.ncols_numeric)
+    {
+        col_sampler.prepare_full_pass();
+        size_t col;
+        while (col_sampler.sample_col(col))
+        {
+            if (col >= input_data.ncols_numeric)
+                continue;
+            if (input_data.Xc_indptr != NULL)
+            {
+                get_range((size_t*)ix_arr.data(), (size_t)0, ix_arr.size()-(size_t)1, col,
+                          input_data.Xc, input_data.Xc_ind, input_data.Xc_indptr,
+                          model_params.missing_action, this->box_low[col], this->box_high[col], unsplittable);
+            }
+
+            else
+            {
+                get_range((size_t*)ix_arr.data(), input_data.numeric_data + input_data.nrows * col, (size_t)0, ix_arr.size()-(size_t)1,
+                          model_params.missing_action, this->box_low[col], this->box_high[col], unsplittable);
+            }
+
+            if (unsplittable)
+            {
+                this->box_low[col] = 0;
+                this->box_high[col] = 0;
+                col_sampler.drop_col(col);
+            }
+        }
+    }
+
+    // else if (input_data.ncols_numeric)
+    // {
+    //     size_t n_unsplittable = 0;
+    //     std::vector<size_t> unsplittable_cols;
+    //     if (col_sampler_is_fresh && !col_sampler.has_weights())
+    //         unsplittable_cols.reserve(input_data.ncols_numeric);
+
+    //     /* TODO: this will do unnecessary calculations when using 'leave_m_cols' */
+    //     for (size_t col = 0; col < input_data.ncols_numeric; col++)
+    //     {
+    //         if (input_data.Xc_indptr != NULL)
+    //         {
+    //             get_range((size_t*)ix_arr.data(), (size_t)0, ix_arr.size()-(size_t)1, col,
+    //                       input_data.Xc, input_data.Xc_ind, input_data.Xc_indptr,
+    //                       model_params.missing_action, this->box_low[col], this->box_high[col], unsplittable);
+    //         }
+
+    //         else
+    //         {
+    //             get_range((size_t*)ix_arr.data(), input_data.numeric_data + input_data.nrows * col, (size_t)0, ix_arr.size()-(size_t)1,
+    //                       model_params.missing_action, this->box_low[col], this->box_high[col], unsplittable);
+    //         }
+
+    //         if (unsplittable)
+    //         {
+    //             this->box_low[col] = 0;
+    //             this->box_high[col] = 0;
+    //             n_unsplittable++;
+    //             if (col_sampler.has_weights())
+    //                 col_sampler.drop_col(col);
+    //             else if (col_sampler_is_fresh)
+    //                 unsplittable_cols.push_back(col);
+    //         }
+    //     }
+
+    //     if (n_unsplittable && col_sampler_is_fresh && !col_sampler.has_weights())
+    //     {
+    //         #if (__cplusplus >= 202002L)
+    //         for (auto col : unsplittable_cols | std::views::reverse)
+    //             col_sampler.drop_from_tail(col);
+    //         #else
+    //         for (size_t inv_col = 0; inv_col < unsplittable_cols.size(); inv_col++)
+    //         {
+    //             size_t col = unsplittable_cols.size() - inv_col - 1;
+    //             col_sampler.drop_from_tail(unsplittable_cols[col]);
+    //         }
+    //         #endif
+    //     }
+
+    //     else if (n_unsplittable > model_params.sample_size / 16 && !col_sampler_is_fresh && !col_sampler.has_weights())
+    //     {
+    //         /* TODO */
+    //     }
+    // }
+}
+
+void DensityCalculator::push_density(double xmin, double xmax, double split_point)
+{
+    if (std::isinf(xmax) || std::isinf(xmin) || std::isnan(xmin) || std::isnan(xmax) || std::isnan(split_point))
+    {
+        this->multipliers.push_back(0);
+        return;
+    }
+
+    double range = std::fmax(xmax - xmin, std::numeric_limits<double>::min());
+    double dleft = std::fmax(split_point - xmin, std::numeric_limits<double>::min());
+    double dright = std::fmax(xmax - split_point, std::numeric_limits<double>::min());
+    double mult_left = std::log(dleft / range);
+    double mult_right = std::log(dright / range);
+    while (std::isinf(mult_left))
+    {
+        dleft = std::nextafter(dleft, (mult_left < 0)? HUGE_VAL : (-HUGE_VAL));
+        mult_left = std::log(dleft / range);
+    }
+    while (std::isinf(mult_right))
+    {
+        dright = std::nextafter(dright, (mult_right < 0)? HUGE_VAL : (-HUGE_VAL));
+        mult_right = std::log(dright / range);
+    }
+
+    mult_left = std::isnan(mult_left)? 0 : mult_left;
+    mult_right = std::isnan(mult_right)? 0 : mult_right;
+
+    ldouble_safe curr = this->multipliers.back();
+    this->multipliers.push_back(curr + mult_right);
+    this->multipliers.push_back(curr + mult_left);
+}
+
+void DensityCalculator::push_density(int n_left, int n_present)
+{
+    this->push_density(0., (double)n_present, (double)n_left);
+}
+
+/* For single category splits */
+void DensityCalculator::push_density(size_t counts[], int ncat)
+{
+    /* this one assumes 'categ_present' has entries 0/1 for missing/present */
+    int n_present = 0;
+    for (int cat = 0; cat < ncat; cat++)
+        n_present += counts[cat] > 0;
+    this->push_density(0., (double)n_present, 1.);
+}
+
+/* For single category splits */
+void DensityCalculator::push_density(int n_present)
+{
+    this->push_density(0., (double)n_present, 1.);
+}
+
+/* For binary categorical splits */
+void DensityCalculator::push_density()
+{
+    this->multipliers.push_back(0);
+    this->multipliers.push_back(0);
+}
+
+void DensityCalculator::push_adj(double xmin, double xmax, double split_point, double pct_tree_left, ScoringMetric scoring_metric)
+{
+    double range = std::fmax(xmax - xmin, std::numeric_limits<double>::min());
+    double dleft = std::fmax(split_point - xmin, std::numeric_limits<double>::min());
+    double dright = std::fmax(xmax - split_point, std::numeric_limits<double>::min());
+    double chunk_left = dleft / range;
+    double chunk_right = dright / range;
+    if (std::isinf(xmax) || std::isinf(xmin) || std::isnan(xmin) || std::isnan(xmax) || std::isnan(split_point))
+    {
+        chunk_left = pct_tree_left;
+        chunk_right = 1. - pct_tree_left;
+        goto add_chunks;
+    }
+
+    if (std::isnan(chunk_left) || std::isnan(chunk_right))
+    {
+        chunk_left = 0.5;
+        chunk_right = 0.5;
+    }
+
+    chunk_left = pct_tree_left / chunk_left;
+    chunk_right = (1. - pct_tree_left) / chunk_right;
+
+    add_chunks:
+    chunk_left = 2. / (1. + .5/chunk_left);
+    chunk_right = 2. / (1. + .5/chunk_right);
+    // chunk_left = 2. / (1. + 1./chunk_left);
+    // chunk_right = 2. / (1. + 1./chunk_right);
+    // chunk_left = 2. - std::exp2(1. - chunk_left);
+    // chunk_right = 2. - std::exp2(1. - chunk_right);
+
+    ldouble_safe curr = this->multipliers.back();
+    if (scoring_metric == AdjDepth)
+    {
+        this->multipliers.push_back(curr + chunk_right);
+        this->multipliers.push_back(curr + chunk_left);
+    }
+
+    else 
+    {
+        this->multipliers.push_back(std::fmax(curr * chunk_right, (ldouble_safe)std::numeric_limits<double>::epsilon()));
+        this->multipliers.push_back(std::fmax(curr * chunk_left, (ldouble_safe)std::numeric_limits<double>::epsilon()));
+    }
+}
+
+void DensityCalculator::push_adj(signed char *restrict categ_present, size_t *restrict counts, int ncat, ScoringMetric scoring_metric)
+{
+    /* this one assumes 'categ_present' has entries -1/0/1 for missing/right/left */
+    int cnt_cat_left = 0;
+    int cnt_cat = 0;
+    size_t cnt = 0;
+    size_t cnt_left = 0;
+    for (int cat = 0; cat < ncat; cat++)
+    {
+        if (counts[cat] > 0)
+        {
+            cnt += counts[cat];
+            cnt_cat_left += categ_present[cat];
+            cnt_left += categ_present[cat]? counts[cat] : 0;
+            cnt_cat++;
+        }
+    }
+
+    double pct_tree_left = (long double)cnt_left / (long double)cnt;
+    this->push_adj(0., (double)cnt_cat, (double)cnt_cat_left, pct_tree_left, scoring_metric);
+}
+
+/* For single category splits */
+void DensityCalculator::push_adj(size_t *restrict counts, int ncat, int chosen_cat, ScoringMetric scoring_metric)
+{
+    /* this one assumes 'categ_present' has entries 0/1 for missing/present */
+    int cnt_cat = 0;
+    size_t cnt = 0;
+    for (int cat = 0; cat < ncat; cat++)
+    {
+        cnt += counts[cat];
+        cnt_cat += counts[cat] > 0;
+    }
+
+    double pct_tree_left = (long double)counts[chosen_cat] / (long double)cnt;
+    this->push_adj(0., (double)cnt_cat, 1., pct_tree_left, scoring_metric);
+}
+
+/* For binary categorical splits */
+void DensityCalculator::push_adj(double pct_tree_left, ScoringMetric scoring_metric)
+{
+    this->push_adj(0., 1., 0.5, pct_tree_left, scoring_metric);
+}
+
+void DensityCalculator::push_bdens(double split_point, size_t col)
+{
+    if (this->fast_bratio)
+        this->push_bdens_fast_route(split_point, col);
+    else
+        this->push_bdens_internal(split_point, col);
+}
+
+void DensityCalculator::push_bdens_internal(double split_point, size_t col)
+{
+    this->queue_box.push_back(this->box_high[col]);
+    this->box_high[col] = split_point;
+}
+
+void DensityCalculator::push_bdens_fast_route(double split_point, size_t col)
+{
+    ldouble_safe curr_range = (ldouble_safe)this->box_high[col] - (ldouble_safe)this->box_low[col];
+    ldouble_safe fraction_left  =  ((ldouble_safe)split_point - (ldouble_safe)this->box_low[col]) / curr_range;
+    ldouble_safe fraction_right = ((ldouble_safe)this->box_high[col] - (ldouble_safe)split_point) / curr_range;
+    fraction_left   = std::fmax(fraction_left, (ldouble_safe)std::numeric_limits<double>::min());
+    fraction_left   = std::fmin(fraction_left, (ldouble_safe)(1. - std::numeric_limits<double>::epsilon()));
+    fraction_left   = std::log(fraction_left);
+    fraction_left  += this->multipliers.back();
+    fraction_right  = std::fmax(fraction_right, (ldouble_safe)std::numeric_limits<double>::min());
+    fraction_right  = std::fmin(fraction_right, (ldouble_safe)(1. - std::numeric_limits<double>::epsilon()));
+    fraction_right  = std::log(fraction_right);
+    fraction_right += this->multipliers.back();
+    this->multipliers.push_back(fraction_right);
+    this->multipliers.push_back(fraction_left);
+
+    this->push_bdens_internal(split_point, col);
+}
+
+void DensityCalculator::push_bdens(int ncat_branch_left, size_t col)
+{
+    if (this->fast_bratio)
+        this->push_bdens_fast_route(ncat_branch_left, col);
+    else
+        this->push_bdens_internal(ncat_branch_left, col);
+}
+
+void DensityCalculator::push_bdens_internal(int ncat_branch_left, size_t col)
+{
+    this->queue_ncat.push_back(this->ncat[col]);
+    this->ncat[col] = ncat_branch_left;
+}
+
+void DensityCalculator::push_bdens_fast_route(int ncat_branch_left, size_t col)
+{
+    double fraction_left = std::log((double)ncat_branch_left / this->ncat[col]);
+    double fraction_right = std::log((double)(this->ncat[col] - ncat_branch_left) / this->ncat[col]);
+    ldouble_safe curr = this->multipliers.back();
+    this->multipliers.push_back(curr + fraction_right);
+    this->multipliers.push_back(curr + fraction_left);
+
+    this->push_bdens_internal(ncat_branch_left, col);
+}
+
+void DensityCalculator::push_bdens(const std::vector<signed char> &cat_split, size_t col)
+{
+    if (this->fast_bratio)
+        this->push_bdens_fast_route(cat_split, col);
+    else
+        this->push_bdens_internal(cat_split, col);
+}
+
+void DensityCalculator::push_bdens_internal(const std::vector<signed char> &cat_split, size_t col)
+{
+    int ncat_branch_left = 0;
+    for (auto el : cat_split)
+        ncat_branch_left += el == 1;
+    this->push_bdens_internal(ncat_branch_left, col);
+}
+
+void DensityCalculator::push_bdens_fast_route(const std::vector<signed char> &cat_split, size_t col)
+{
+    int ncat_branch_left = 0;
+    for (auto el : cat_split)
+        ncat_branch_left += el == 1;
+    this->push_bdens_fast_route(ncat_branch_left, col);
+}
+
+void DensityCalculator::push_bdens_ext(const IsoHPlane &hplane, const ModelParams &model_params)
+{
+    double x1, x2;
+    double xlow = 0, xhigh = 0;
+    size_t col;
+    size_t col_num = 0;
+    size_t col_cat = 0;
+
+    for (size_t col_outer = 0; col_outer < hplane.col_num.size(); col_outer++)
+    {
+        switch (hplane.col_type[col_outer])
+        {
+            case Numeric:
+            {
+                col = hplane.col_num[col_outer];
+                x1 = hplane.coef[col_num] * (this->box_low[col] - hplane.mean[col_num]);
+                x2 = hplane.coef[col_num] * (this->box_high[col] - hplane.mean[col_num]);
+                xlow += std::fmin(x1, x2);
+                xhigh += std::fmax(x1, x2);
+                break;
+            }
+
+            case Categorical:
+            {
+                switch (model_params.cat_split_type)
+                {
+                    case SingleCateg:
+                    {
+                        xlow += std::fmin(hplane.fill_new[col_cat], 0.);
+                        xhigh += std::fmax(hplane.fill_new[col_cat], 0.);
+                        break;
+                    }
+
+                    case SubSet:
+                    {
+                        xlow += *std::min_element(hplane.cat_coef[col_cat].begin(), hplane.cat_coef[col_cat].end());
+                        xhigh += *std::max_element(hplane.cat_coef[col_cat].begin(), hplane.cat_coef[col_cat].end());
+                        break;
+                    }
+                }
+                break;
+            }
+
+            default:
+            {
+                assert(0);
+            }
+        }
+    }
+
+    double chunk_left;
+    double chunk_right;
+    double xdiff = xhigh - xlow;
+
+    if (model_params.scoring_metric != BoxedDensity)
+    {
+        chunk_left = (hplane.split_point - xlow) / xdiff;
+        chunk_right = (xhigh - hplane.split_point) / xdiff;
+        chunk_left = std::fmin(chunk_left, std::numeric_limits<double>::min());
+        chunk_left = std::fmax(chunk_left, 1.-std::numeric_limits<double>::epsilon());
+        chunk_right = std::fmin(chunk_right, std::numeric_limits<double>::min());
+        chunk_right = std::fmax(chunk_right, 1.-std::numeric_limits<double>::epsilon());
+    }
+
+    else
+    {
+        chunk_left = xdiff / (hplane.split_point - xlow);
+        chunk_right = xdiff / (xhigh - hplane.split_point);
+        chunk_left = std::fmin(chunk_left, 1.);
+        chunk_right = std::fmin(chunk_right, 1.);
+    }
+
+    this->queue_ext_box.push_back(std::log(chunk_right) + this->vals_ext_box.back());
+    this->vals_ext_box.push_back(std::log(chunk_left) + this->vals_ext_box.back());
+}
+
+void DensityCalculator::pop()
+{
+    this->multipliers.pop_back();
+}
+
+void DensityCalculator::pop_right()
+{
+    this->multipliers.pop_back();
+}
+
+void DensityCalculator::pop_bdens(size_t col)
+{
+    if (this->fast_bratio)
+        this->pop_bdens_fast_route(col);
+    else
+        this->pop_bdens_internal(col);
+}
+
+void DensityCalculator::pop_bdens_internal(size_t col)
+{
+    double old_high = this->queue_box.back();
+    this->queue_box.pop_back();
+    this->queue_box.push_back(this->box_low[col]);
+    this->box_low[col] = this->box_high[col];
+    this->box_high[col] = old_high;
+}
+
+void DensityCalculator::pop_bdens_fast_route(size_t col)
+{
+    this->multipliers.pop_back();
+    this->pop_bdens_internal(col);
+}
+
+void DensityCalculator::pop_bdens_right(size_t col)
+{
+    if (this->fast_bratio)
+        this->pop_bdens_right_fast_route(col);
+    else
+        this->pop_bdens_right_internal(col);
+}
+
+void DensityCalculator::pop_bdens_right_internal(size_t col)
+{
+    double old_low = this->queue_box.back();
+    this->queue_box.pop_back();
+    this->box_low[col] = old_low;
+}
+
+void DensityCalculator::pop_bdens_right_fast_route(size_t col)
+{
+    this->multipliers.pop_back();
+    this->pop_bdens_right_internal(col);
+}
+
+void DensityCalculator::pop_bdens_cat(size_t col)
+{
+    if (this->fast_bratio)
+        this->pop_bdens_cat_fast_route(col);
+    else
+        this->pop_bdens_cat_internal(col);
+}
+
+void DensityCalculator::pop_bdens_cat_internal(size_t col)
+{
+    int old_ncat = this->queue_ncat.back();
+    this->ncat[col] = old_ncat - this->ncat[col];
+}
+
+void DensityCalculator::pop_bdens_cat_fast_route(size_t col)
+{
+    this->multipliers.pop_back();
+    this->pop_bdens_cat_internal(col);
+}
+
+void DensityCalculator::pop_bdens_cat_right(size_t col)
+{
+    if (this->fast_bratio)
+        this->pop_bdens_cat_right_fast_route(col);
+    else
+        this->pop_bdens_cat_right_internal(col);
+}
+
+void DensityCalculator::pop_bdens_cat_right_internal(size_t col)
+{
+    int old_ncat = this->queue_ncat.back();
+    this->queue_ncat.pop_back();
+    this->ncat[col] = old_ncat;
+}
+
+void DensityCalculator::pop_bdens_cat_right_fast_route(size_t col)
+{
+    this->multipliers.pop_back();
+    this->pop_bdens_cat_right_internal(col);
+}
+
+void DensityCalculator::pop_bdens_ext()
+{
+    this->vals_ext_box.pop_back();
+    this->vals_ext_box.push_back(this->queue_ext_box.back());
+    this->queue_ext_box.pop_back();
+}
+
+void DensityCalculator::pop_bdens_ext_right()
+{
+    this->vals_ext_box.pop_back();
+}
+
+/* this outputs the logarithm of the density */
+double DensityCalculator::calc_density(long double remainder, size_t sample_size)
+{
+    return std::log(remainder) - std::log((long double)sample_size) - this->multipliers.back();
+}
+
+ldouble_safe DensityCalculator::calc_adj_depth()
+{
+    ldouble_safe out = this->multipliers.back();
+    return std::fmax(out, (ldouble_safe)std::numeric_limits<double>::min());
+}
+
+double DensityCalculator::calc_adj_density()
+{
+    return this->multipliers.back();
+}
+
+/* this outputs the logarithm of the density */
+ldouble_safe DensityCalculator::calc_bratio_inv_log()
+{
+    if (!this->multipliers.empty())
+        return -this->multipliers.back();
+
+    ldouble_safe sum_log_switdh = 0;
+    ldouble_safe ratio_col;
+    for (size_t col = 0; col < this->ranges.size(); col++)
+    {
+        if (!this->ranges[col]) continue;
+        ratio_col = this->ranges[col] / ((ldouble_safe)this->box_high[col] - (ldouble_safe)this->box_low[col]);
+        ratio_col = std::fmax(ratio_col, 1.0l);
+        sum_log_switdh += std::log(ratio_col);
+    }
+
+    for (size_t col = 0; col < this->ncat.size(); col++)
+    {
+        if (this->ncat_orig[col] <= 1) continue;
+        sum_log_switdh += std::log((double)this->ncat_orig[col] / (double)this->ncat[col]);
+    }
+
+    return sum_log_switdh;
+}
+
+ldouble_safe DensityCalculator::calc_bratio_log()
+{
+    if (!this->multipliers.empty())
+        return this->multipliers.back();
+
+    ldouble_safe sum_log_switdh = 0;
+    ldouble_safe ratio_col;
+    for (size_t col = 0; col < this->ranges.size(); col++)
+    {
+        if (!this->ranges[col]) continue;
+        ratio_col = ((ldouble_safe)this->box_high[col] - (ldouble_safe)this->box_low[col]) / this->ranges[col];
+        ratio_col = std::fmax(ratio_col, (ldouble_safe)std::numeric_limits<double>::min());
+        ratio_col = std::fmin(ratio_col, (ldouble_safe)(1. - std::numeric_limits<double>::epsilon()));
+        sum_log_switdh += std::log(ratio_col);
+    }
+
+    for (size_t col = 0; col < this->ncat.size(); col++)
+    {
+        if (this->ncat_orig[col] <= 1) continue;
+        sum_log_switdh += std::log((double)this->ncat[col] / (double)this->ncat_orig[col]);
+    }
+
+    return sum_log_switdh;
+}
+
+/* this does NOT output the logarithm of the density */
+double DensityCalculator::calc_bratio()
+{
+    return std::exp(this->calc_bratio_log());
+}
+
+const double MIN_DENS = std::log(std::numeric_limits<double>::min());
+
+/* this outputs the logarithm of the density */
+double DensityCalculator::calc_bdens(long double remainder, size_t sample_size)
+{
+    double out = std::log(remainder) - std::log((long double)sample_size) - this->calc_bratio_inv_log();
+    return std::fmax(out, MIN_DENS);
+}
+
+/* this outputs the logarithm of the density */
+double DensityCalculator::calc_bdens2(long double remainder, size_t sample_size)
+{
+    double out = std::log(remainder) - std::log((long double)sample_size) - this->calc_bratio_log();
+    return std::fmax(out, MIN_DENS);
+}
+
+/* this outputs the logarithm of the density */
+ldouble_safe DensityCalculator::calc_bratio_log_ext()
+{
+    return this->vals_ext_box.back();
+}
+
+double DensityCalculator::calc_bratio_ext()
+{
+    double out = std::exp(this->calc_bratio_log_ext());
+    return std::fmax(out, std::numeric_limits<double>::min());
+}
+
+/* this outputs the logarithm of the density */
+double DensityCalculator::calc_bdens_ext(long double remainder, size_t sample_size)
+{
+    double out = std::log(remainder) - std::log((long double)sample_size) - this->calc_bratio_log_ext();
+    return std::fmax(out, MIN_DENS);
+}
+
+void DensityCalculator::save_range(double xmin, double xmax)
+{
+    this->xmin = xmin;
+    this->xmax = xmax;
+}
+
+void DensityCalculator::restore_range(double &restrict xmin, double &restrict xmax)
+{
+    xmin = this->xmin;
+    xmax = this->xmax;
+}
+
+void DensityCalculator::save_counts(size_t *restrict cat_counts, int ncat)
+{
+    this->counts.assign(cat_counts, cat_counts + ncat);
+}
+
+void DensityCalculator::save_n_present_and_left(signed char *restrict split_left, int ncat)
+{
+    this->n_present = 0;
+    this->n_left = 0;
+    for (int cat = 0; cat < ncat; cat++)
+    {
+        this->n_present += split_left[cat] >= 0;
+        this->n_left += split_left[cat] == 1;
+    }
+}
+
+void DensityCalculator::save_n_present(size_t *restrict cat_counts, int ncat)
+{
+    this->n_present = 0;
+    for (int cat = 0; cat < ncat; cat++)
+        this->n_present +=  cat_counts[cat] > 0;
+}
 
 /* For hyperplane intersections */
 size_t divide_subset_split(size_t ix_arr[], double x[], size_t st, size_t end, double split_point)
@@ -1001,8 +2187,8 @@ size_t divide_subset_split(size_t ix_arr[], double x[], size_t st, size_t end, d
 
 /* For numerical columns */
 template <class real_t>
-void divide_subset_split(size_t ix_arr[], real_t x[], size_t st, size_t end, double split_point,
-                         MissingAction missing_action, size_t &st_NA, size_t &end_NA, size_t &split_ix)
+void divide_subset_split(size_t *restrict ix_arr, real_t x[], size_t st, size_t end, double split_point,
+                         MissingAction missing_action, size_t &restrict st_NA, size_t &restrict end_NA, size_t &restrict split_ix)
 {
     size_t temp;
 
@@ -1054,9 +2240,9 @@ void divide_subset_split(size_t ix_arr[], real_t x[], size_t st, size_t end, dou
 
 /* For sparse numeric columns */
 template <class real_t, class sparse_ix>
-void divide_subset_split(size_t ix_arr[], size_t st, size_t end, size_t col_num,
-                         real_t Xc[], sparse_ix Xc_ind[], sparse_ix Xc_indptr[], double split_point,
-                         MissingAction missing_action, size_t &st_NA, size_t &end_NA, size_t &split_ix)
+void divide_subset_split(size_t *restrict ix_arr, size_t st, size_t end, size_t col_num,
+                         real_t Xc[], sparse_ix *restrict Xc_ind, sparse_ix *restrict Xc_indptr, double split_point,
+                         MissingAction missing_action, size_t &restrict st_NA, size_t &restrict end_NA, size_t &restrict split_ix)
 {
     /* TODO: this is a mess, needs refactoring */
     /* TODO: when moving zeros, would be better to instead move by '>' (opposite as in here) */
@@ -1317,8 +2503,8 @@ void divide_subset_split(size_t ix_arr[], size_t st, size_t end, size_t col_num,
 }
 
 /* For categorical columns split by subset */
-void divide_subset_split(size_t ix_arr[], int x[], size_t st, size_t end, signed char split_categ[],
-                         MissingAction missing_action, size_t &st_NA, size_t &end_NA, size_t &split_ix)
+void divide_subset_split(size_t *restrict ix_arr, int x[], size_t st, size_t end, signed char split_categ[],
+                         MissingAction missing_action, size_t &restrict st_NA, size_t &restrict end_NA, size_t &restrict split_ix)
 {
     size_t temp;
 
@@ -1369,9 +2555,9 @@ void divide_subset_split(size_t ix_arr[], int x[], size_t st, size_t end, signed
 }
 
 /* For categorical columns split by subset, used at prediction time (with similarity) */
-void divide_subset_split(size_t ix_arr[], int x[], size_t st, size_t end, signed char split_categ[],
+void divide_subset_split(size_t *restrict ix_arr, int x[], size_t st, size_t end, signed char split_categ[],
                          int ncat, MissingAction missing_action, NewCategAction new_cat_action,
-                         bool move_new_to_left, size_t &st_NA, size_t &end_NA, size_t &split_ix)
+                         bool move_new_to_left, size_t &restrict st_NA, size_t &restrict end_NA, size_t &restrict split_ix)
 {
     size_t temp;
     int cval;
@@ -1587,15 +2773,15 @@ void divide_subset_split(size_t ix_arr[], int x[], size_t st, size_t end, signed
 }
 
 /* For categoricals split on a single category */
-void divide_subset_split(size_t ix_arr[], int x[], size_t st, size_t end, int split_categ,
-                         MissingAction missing_action, size_t &st_NA, size_t &end_NA, size_t &split_ix)
+void divide_subset_split(size_t *restrict ix_arr, int x[], size_t st, size_t end, int split_categ,
+                         MissingAction missing_action, size_t &restrict st_NA, size_t &restrict end_NA, size_t &restrict split_ix)
 {
     size_t temp;
 
     /* if NAs are not to be bothered with, just need to do a single pass */
     if (missing_action == Fail)
     {
-        /* move to the left if it's l.e. than the split point */
+        /* move to the left if it's equal to the chosen category */
         for (size_t row = st; row <= end; row++)
         {
             if (x[ix_arr[row]] == split_categ)
@@ -1609,7 +2795,7 @@ void divide_subset_split(size_t ix_arr[], int x[], size_t st, size_t end, int sp
         split_ix = st;
     }
 
-    /* otherwise, first put to the left all l.e. and not NA, then all NAs to the end of the left */
+    /* otherwise, first put to the left all equal to chosen and not NA, then all NAs to the end of the left */
     else
     {
         for (size_t row = st; row <= end; row++)
@@ -1639,9 +2825,9 @@ void divide_subset_split(size_t ix_arr[], int x[], size_t st, size_t end, int sp
 }
 
 /* For categoricals split on sub-set that turned out to have 2 categories only (prediction-time) */
-void divide_subset_split(size_t ix_arr[], int x[], size_t st, size_t end,
+void divide_subset_split(size_t *restrict ix_arr, int x[], size_t st, size_t end,
                          MissingAction missing_action, NewCategAction new_cat_action,
-                         bool move_new_to_left, size_t &st_NA, size_t &end_NA, size_t &split_ix)
+                         bool move_new_to_left, size_t &restrict st_NA, size_t &restrict end_NA, size_t &restrict split_ix)
 {
     size_t temp;
 
@@ -1740,18 +2926,20 @@ void divide_subset_split(size_t ix_arr[], int x[], size_t st, size_t end,
 
 /* for regular numeric columns */
 template <class real_t>
-void get_range(size_t ix_arr[], real_t x[], size_t st, size_t end,
-               MissingAction missing_action, double &xmin, double &xmax, bool &unsplittable)
+void get_range(size_t ix_arr[], real_t *restrict x, size_t st, size_t end,
+               MissingAction missing_action, double &restrict xmin, double &restrict xmax, bool &unsplittable)
 {
     xmin =  HUGE_VAL;
     xmax = -HUGE_VAL;
+    double xval;
 
     if (missing_action == Fail)
     {
         for (size_t row = st; row <= end; row++)
         {
-            xmin = (x[ix_arr[row]] < xmin)? x[ix_arr[row]] : xmin;
-            xmax = (x[ix_arr[row]] > xmax)? x[ix_arr[row]] : xmax;
+            xval = x[ix_arr[row]];
+            xmin = (xval < xmin)? xval : xmin;
+            xmax = (xval > xmax)? xval : xmax;
         }
     }
 
@@ -1760,8 +2948,38 @@ void get_range(size_t ix_arr[], real_t x[], size_t st, size_t end,
     {
         for (size_t row = st; row <= end; row++)
         {
-            xmin = std::fmin(xmin, x[ix_arr[row]]);
-            xmax = std::fmax(xmax, x[ix_arr[row]]);
+            xval = x[ix_arr[row]];
+            xmin = std::fmin(xmin, xval);
+            xmax = std::fmax(xmax, xval);
+        }
+    }
+
+    unsplittable = (xmin == xmax) || (xmin == HUGE_VAL && xmax == -HUGE_VAL) || isnan(xmin) || isnan(xmax);
+}
+
+template <class real_t>
+void get_range(real_t *restrict x, size_t n,
+               MissingAction missing_action, double &restrict xmin, double &restrict xmax, bool &unsplittable)
+{
+    xmin =  HUGE_VAL;
+    xmax = -HUGE_VAL;
+
+    if (missing_action == Fail)
+    {
+        for (size_t row = 0; row < n; row++)
+        {
+            xmin = (x[row] < xmin)? x[row] : xmin;
+            xmax = (x[row] > xmax)? x[row] : xmax;
+        }
+    }
+
+
+    else
+    {
+        for (size_t row = 0; row < n; row++)
+        {
+            xmin = std::fmin(xmin, x[row]);
+            xmax = std::fmax(xmax, x[row]);
         }
     }
 
@@ -1770,9 +2988,9 @@ void get_range(size_t ix_arr[], real_t x[], size_t st, size_t end,
 
 /* for sparse inputs */
 template <class real_t, class sparse_ix>
-void get_range(size_t ix_arr[], size_t st, size_t end, size_t col_num,
-               real_t Xc[], sparse_ix Xc_ind[], sparse_ix Xc_indptr[],
-               MissingAction missing_action, double &xmin, double &xmax, bool &unsplittable)
+void get_range(size_t *restrict ix_arr, size_t st, size_t end, size_t col_num,
+               real_t *restrict Xc, sparse_ix *restrict Xc_ind, sparse_ix *restrict Xc_indptr,
+               MissingAction missing_action, double &restrict xmin, double &restrict xmax, bool &unsplittable)
 {
     /* ix_arr must already be sorted beforehand */
     xmin =  HUGE_VAL;
@@ -1861,13 +3079,49 @@ void get_range(size_t ix_arr[], size_t st, size_t end, size_t col_num,
         xmin = std::fmin(xmin, 0);
         xmax = std::fmax(xmax, 0);
     }
-    unsplittable = (xmin == xmax) || (xmin == HUGE_VAL && xmax == -HUGE_VAL) || isnan(xmin) || isnan(xmax);
 
+    unsplittable = (xmin == xmax) || (xmin == HUGE_VAL && xmax == -HUGE_VAL) || isnan(xmin) || isnan(xmax);
+}
+
+template <class real_t, class sparse_ix>
+void get_range(size_t col_num, size_t nrows,
+               real_t *restrict Xc, sparse_ix *restrict Xc_ind, sparse_ix *restrict Xc_indptr,
+               MissingAction missing_action, double &restrict xmin, double &restrict xmax, bool &unsplittable)
+{
+    xmin =  HUGE_VAL;
+    xmax = -HUGE_VAL;
+
+    if ((size_t)(Xc_indptr[col_num+1] - Xc_indptr[col_num]) < nrows)
+    {
+        xmin = 0;
+        xmax = 0;
+    }
+
+    if (missing_action == Fail)
+    {
+        for (auto ix = Xc_indptr[col_num]; ix < Xc_indptr[col_num+1]; ix++)
+        {
+            xmin = (Xc[ix] < xmin)? Xc[ix] : xmin;
+            xmax = (Xc[ix] > xmax)? Xc[ix] : xmax;
+        }
+    }
+
+    else
+    {
+        for (auto ix = Xc_indptr[col_num]; ix < Xc_indptr[col_num+1]; ix++)
+        {
+            if (std::isinf(Xc[ix])) continue;
+            xmin = std::fmin(xmin, Xc[ix]);
+            xmax = std::fmax(xmax, Xc[ix]);
+        }
+    }
+
+    unsplittable = (xmin == xmax) || (xmin == HUGE_VAL && xmax == -HUGE_VAL) || isnan(xmin) || isnan(xmax);
 }
 
 
-void get_categs(size_t ix_arr[], int x[], size_t st, size_t end, int ncat,
-                MissingAction missing_action, signed char categs[], size_t &npresent, bool &unsplittable)
+void get_categs(size_t *restrict ix_arr, int x[], size_t st, size_t end, int ncat,
+                MissingAction missing_action, signed char categs[], size_t &restrict npresent, bool &unsplittable)
 {
     std::fill(categs, categs + ncat, -1);
     npresent = 0;
@@ -1884,41 +3138,237 @@ void get_categs(size_t ix_arr[], int x[], size_t st, size_t end, int ncat,
     unsplittable = npresent < 2;
 }
 
-#if !defined(_WIN32) && !defined(_WIN64)
-long double calculate_sum_weights(std::vector<size_t> &ix_arr, size_t st, size_t end, size_t curr_depth,
-                                  std::vector<double> &weights_arr, hashed_map<size_t, double> &weights_map)
+template <class real_t>
+bool check_more_than_two_unique_values(size_t ix_arr[], size_t st, size_t end, real_t x[], MissingAction missing_action)
 {
-    if (curr_depth > 0 && weights_arr.size())
+    if (end - st <= 1) return false;
+
+    if (missing_action == Fail)
+    {
+        real_t x0 = x[ix_arr[st]];
+        for (size_t ix = st+1; ix <= end; ix++)
+        {
+            if (x[ix_arr[ix]] != x0) return true;
+        }
+    }
+
+    else
+    {
+        real_t x0;
+        size_t ix;
+        for (ix = st; ix <= end; ix++)
+        {
+            if (!is_na_or_inf(x[ix_arr[ix]]))
+            {
+                x0 = x[ix_arr[ix]];
+                ix++;
+                break;
+            }
+        }
+
+        for (; ix <= end; ix++)
+        {
+            if (!is_na_or_inf(x[ix_arr[ix]]) && x[ix_arr[ix]] != x0)
+                return true;
+        }
+    }
+
+    return false;
+}
+
+bool check_more_than_two_unique_values(size_t ix_arr[], size_t st, size_t end, int x[], MissingAction missing_action)
+{
+    if (end - st <= 1) return false;
+
+    if (missing_action == Fail)
+    {
+        int x0 = x[ix_arr[st]];
+        for (size_t ix = st+1; ix <= end; ix++)
+        {
+            if (x[ix_arr[ix]] != x0) return true;
+        }
+    }
+
+    else
+    {
+        int x0;
+        size_t ix;
+        for (ix = st; ix <= end; ix++)
+        {
+            if (x[ix_arr[ix]] >= 0)
+            {
+                x0 = x[ix_arr[ix]];
+                ix++;
+                break;
+            }
+        }
+
+        for (; ix <= end; ix++)
+        {
+            if (x[ix_arr[ix]] >= 0 && x[ix_arr[ix]] != x0)
+                return true;
+        }
+    }
+
+    return false;
+}
+
+template <class real_t, class sparse_ix>
+bool check_more_than_two_unique_values(size_t *restrict ix_arr, size_t st, size_t end, size_t col,
+                                       sparse_ix *restrict Xc_indptr, sparse_ix *restrict Xc_ind, real_t *restrict Xc,
+                                       MissingAction missing_action)
+{
+    if (end - st <= 1) return false;
+    if (Xc_indptr[col+1] == Xc_indptr[col]) return false;
+    bool has_zeros = (end - st + 1) > (size_t)(Xc_indptr[col+1] - Xc_indptr[col]);
+    if (has_zeros && !is_na_or_inf(Xc[Xc_indptr[col]]) && Xc[Xc_indptr[col]] != 0) return true;
+
+    size_t st_col  = Xc_indptr[col];
+    size_t end_col = Xc_indptr[col + 1] - 1;
+    size_t curr_pos = st_col;
+    size_t ind_end_col = Xc_ind[end_col];
+
+    /* 'ix_arr' should be sorted beforehand */
+    /* TODO: refactor this */
+    real_t x0 = 0;
+    size_t *row;
+    for (row = std::lower_bound(ix_arr + st, ix_arr + end + 1, Xc_ind[st_col]);
+         row != ix_arr + end + 1 && curr_pos != end_col + 1 && ind_end_col >= *row;
+        )
+    {
+        if (Xc_ind[curr_pos] == (sparse_ix)(*row))
+        {
+            if (is_na_or_inf(Xc[curr_pos]) || (has_zeros && Xc[curr_pos] == 0))
+            {
+                if (row == ix_arr + end || curr_pos == end_col) return false;
+                curr_pos = std::lower_bound(Xc_ind + curr_pos, Xc_ind + end_col + 1, *(++row)) - Xc_ind;
+            }
+
+            x0 = Xc[curr_pos];
+            if (has_zeros) return true;
+            else if (x0 == 0) has_zeros = true;
+            if (row == ix_arr + end || curr_pos == end_col) return false;
+            curr_pos = std::lower_bound(Xc_ind + curr_pos, Xc_ind + end_col + 1, *(++row)) - Xc_ind;
+            break;
+        }
+
+        else
+        {
+            if (Xc_ind[curr_pos] > (sparse_ix)(*row))
+                row = std::lower_bound(row + 1, ix_arr + end + 1, Xc_ind[curr_pos]);
+            else
+                curr_pos = std::lower_bound(Xc_ind + curr_pos + 1, Xc_ind + end_col + 1, *row) - Xc_ind;
+        }
+    }
+
+    for (;
+         row != ix_arr + end + 1 && curr_pos != end_col + 1 && ind_end_col >= *row;
+        )
+    {
+        if (Xc_ind[curr_pos] == (sparse_ix)(*row))
+        {
+            if (is_na_or_inf(Xc[curr_pos]) || (has_zeros && Xc[curr_pos] == 0))
+            {
+                if (row == ix_arr + end || curr_pos == end_col) break;
+                curr_pos = std::lower_bound(Xc_ind + curr_pos, Xc_ind + end_col + 1, *(++row)) - Xc_ind;
+            }
+
+            else if (Xc[curr_pos] != x0)
+            {
+                return true;
+            }
+
+            if (row == ix_arr + end || curr_pos == end_col) break;
+            curr_pos = std::lower_bound(Xc_ind + curr_pos, Xc_ind + end_col + 1, *(++row)) - Xc_ind;
+        }
+
+        else
+        {
+            if (Xc_ind[curr_pos] > (sparse_ix)(*row))
+                row = std::lower_bound(row + 1, ix_arr + end + 1, Xc_ind[curr_pos]);
+            else
+                curr_pos = std::lower_bound(Xc_ind + curr_pos + 1, Xc_ind + end_col + 1, *row) - Xc_ind;
+        }
+    }
+
+    return false;
+}
+
+template <class real_t, class sparse_ix>
+bool check_more_than_two_unique_values(size_t nrows, size_t col,
+                                       sparse_ix *restrict Xc_indptr, sparse_ix *restrict Xc_ind, real_t *restrict Xc,
+                                       MissingAction missing_action)
+{
+    if (nrows <= 1) return false;
+    if (Xc_indptr[col+1] == Xc_indptr[col]) return false;
+    bool has_zeros = nrows > (size_t)(Xc_indptr[col+1] - Xc_indptr[col]);
+    if (has_zeros && !is_na_or_inf(Xc[Xc_indptr[col]]) && Xc[Xc_indptr[col]] != 0) return true;
+
+    real_t x0 = 0;
+    sparse_ix ix;
+    for (ix = Xc_indptr[col]; ix < Xc_indptr[col+1]; ix++)
+    {
+        if (!is_na_or_inf(Xc[ix]))
+        {
+            if (has_zeros && Xc[ix] == 0) continue;
+            if (has_zeros) return true;
+            else if (Xc[ix] == 0) has_zeros = true;
+            x0 = Xc[ix];
+            ix++;
+            break;
+        }
+    }
+
+    for (ix = Xc_indptr[col]; ix < Xc_indptr[col+1]; ix++)
+    {
+        if (!is_na_or_inf(Xc[ix]))
+        {
+            if (has_zeros && Xc[ix] == 0) continue;
+            if (Xc[ix] != x0) return true;
+        }
+    }
+
+    return false;
+}
+
+void count_categs(size_t *restrict ix_arr, size_t st, size_t end, int x[], int ncat, size_t *restrict counts)
+{
+    std::fill(counts, counts + ncat, (size_t)0);
+    for (size_t row = st; row <= end; row++)
+        if (x[ix_arr[row]] >= 0)
+            counts[x[ix_arr[row]]]++;
+}
+
+int count_ncateg_in_col(const int x[], const size_t n, const int ncat, unsigned char buffer[])
+{
+    memset(buffer, 0, ncat*sizeof(char));
+    for (size_t ix = 0; ix < n; ix++)
+    {
+        if (x[ix] >= 0) buffer[x[ix]] = true;
+    }
+
+    int ncat_present = 0;
+    for (int cat = 0; cat < ncat; cat++)
+        ncat_present += buffer[cat];
+    return ncat_present;
+}
+
+ldouble_safe calculate_sum_weights(std::vector<size_t> &ix_arr, size_t st, size_t end, size_t curr_depth,
+                                   std::vector<double> &weights_arr, hashed_map<size_t, double> &weights_map)
+{
+    if (curr_depth > 0 && !weights_arr.empty())
         return std::accumulate(ix_arr.begin() + st,
                                ix_arr.begin() + end + 1,
-                               (long double)0,
-                               [&weights_arr](const long double a, const size_t ix){return a + weights_arr[ix];});
-    else if (curr_depth > 0 && weights_map.size())
+                               (ldouble_safe)0,
+                               [&weights_arr](const ldouble_safe a, const size_t ix){return a + weights_arr[ix];});
+    else if (curr_depth > 0 && !weights_map.empty())
         return std::accumulate(ix_arr.begin() + st,
                                ix_arr.begin() + end + 1,
-                               (long double)0,
-                               [&weights_map](const long double a, const size_t ix){return a + weights_map[ix];});
+                               (ldouble_safe)0,
+                               [&weights_map](const ldouble_safe a, const size_t ix){return a + weights_map[ix];});
     else
         return -HUGE_VAL;
 }
-#else
-     double calculate_sum_weights(std::vector<size_t> &ix_arr, size_t st, size_t end, size_t curr_depth,
-                                  std::vector<double> &weights_arr, hashed_map<size_t, double> &weights_map)
-{
-    if (curr_depth > 0 && weights_arr.size())
-        return std::accumulate(ix_arr.begin() + st,
-                               ix_arr.begin() + end + 1,
-                               (double)0,
-                               [&weights_arr](const double a, const size_t ix){return a + weights_arr[ix];});
-    else if (curr_depth > 0 && weights_map.size())
-        return std::accumulate(ix_arr.begin() + st,
-                               ix_arr.begin() + end + 1,
-                               (double)0,
-                               [&weights_map](const double a, const size_t ix){return a + weights_map[ix];});
-    else
-        return -HUGE_VAL;
-}
-#endif
 
 template <class real_t>
 size_t move_NAs_to_front(size_t ix_arr[], size_t st, size_t end, real_t x[])
@@ -1941,7 +3391,7 @@ size_t move_NAs_to_front(size_t ix_arr[], size_t st, size_t end, real_t x[])
 }
 
 template <class real_t, class sparse_ix>
-size_t move_NAs_to_front(size_t ix_arr[], size_t st, size_t end, size_t col_num, real_t Xc[], sparse_ix Xc_ind[], sparse_ix Xc_indptr[])
+size_t move_NAs_to_front(size_t *restrict ix_arr, size_t st, size_t end, size_t col_num, real_t Xc[], sparse_ix *restrict Xc_ind, sparse_ix *restrict Xc_indptr)
 {
     size_t st_non_na = st;
     size_t temp;
@@ -2002,7 +3452,7 @@ size_t move_NAs_to_front(size_t ix_arr[], size_t st, size_t end, int x[])
     return st_non_na;
 }
 
-size_t center_NAs(size_t *restrict ix_arr, size_t st_left, size_t st, size_t curr_pos)
+size_t center_NAs(size_t ix_arr[], size_t st_left, size_t st, size_t curr_pos)
 {
     size_t temp;
     for (size_t row = st_left; row < st; row++)
@@ -2015,9 +3465,69 @@ size_t center_NAs(size_t *restrict ix_arr, size_t st_left, size_t st, size_t cur
     return curr_pos;
 }
 
+/* FIXME / TODO: this calculation would not take weight into account */
+/* Here:
+   - 'ix_arr' should be partitioned putting the NAs and Infs at the beginning: [st_orig, st)
+   - the rest of the range [st, end] should be sorted in ascending order
+   The output should have a filled-in 'x' with median values, plus a re-sorted 'ix_arr'
+   taking into account that now the median values are in the middle. */
+template <class real_t>
+void fill_NAs_with_median(size_t *restrict ix_arr, size_t st_orig, size_t st, size_t end, real_t *restrict x,
+                          double *restrict buffer_imputed_x, double *restrict xmedian)
+{
+    size_t tot = end - st + 1;
+    size_t idx_half = st + div2(tot);
+    bool is_odd = (tot % 2) != 0;
+    
+    if (is_odd)
+    {
+        *xmedian = x[ix_arr[idx_half]];
+        idx_half--;
+    }
+
+    else
+    {
+        idx_half--;
+        double xlow = x[ix_arr[idx_half]];
+        double xhigh = x[ix_arr[idx_half+(size_t)1]];
+        *xmedian = xlow + (xhigh-xlow)/2.;
+    }
+
+    for (size_t ix = st_orig; ix < st; ix++)
+        buffer_imputed_x[ix_arr[ix]] = (*xmedian);
+    for (size_t ix = st; ix <= end; ix++)
+        buffer_imputed_x[ix_arr[ix]] = x[ix_arr[ix]];
+
+    /* 'ix_arr' can be resorted in-place, but the logic is a bit complex */
+    /* step 1: move all NAs to their place by swapping them with the lower-half
+       in ascending order (after this, the lower half will be unordered).
+       along the way, copy the indices that claim the places where earlier
+       there were missing values. these copied indices will be sorted in
+       descending order at the end, as they were inserted in reverse order. */
+    size_t end_pointer = idx_half;
+    size_t n_move = std::min(st-st_orig, idx_half-st+1);
+    size_t temp;
+    for (size_t ix = st_orig; ix < st_orig + n_move; ix++)
+    {
+        temp = ix_arr[end_pointer];
+        ix_arr[end_pointer] = ix_arr[ix];
+        ix_arr[ix] = temp;
+        end_pointer--;
+    }
+
+    /* step 2: reverse the indices that were moved to the beginning so
+       as to maintain the sorting order */
+    std::reverse(ix_arr + st_orig, ix_arr + st_orig + n_move);
+    /* step 3: rotate the total number of elements by the number of moved elements */
+    size_t n_unmoved = (idx_half - st + 1) - n_move;
+    std::rotate(ix_arr + st_orig,
+                ix_arr + st_orig + n_move,
+                ix_arr + st_orig + n_move + n_unmoved);
+}
+
 template <class real_t, class sparse_ix>
-void todense(size_t ix_arr[], size_t st, size_t end,
-             size_t col_num, real_t *restrict Xc, sparse_ix Xc_ind[], sparse_ix Xc_indptr[],
+void todense(size_t *restrict ix_arr, size_t st, size_t end,
+             size_t col_num, real_t *restrict Xc, sparse_ix *restrict Xc_ind, sparse_ix *restrict Xc_indptr,
              double *restrict buffer_arr)
 {
     std::fill(buffer_arr, buffer_arr + (end - st + 1), (double)0);

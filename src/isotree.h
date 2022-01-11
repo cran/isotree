@@ -18,11 +18,25 @@
 *     [5] https://sourceforge.net/projects/iforest/
 *     [6] https://math.stackexchange.com/questions/3388518/expected-number-of-paths-required-to-separate-elements-in-a-binary-tree
 *     [7] Quinlan, J. Ross. C4. 5: programs for machine learning. Elsevier, 2014.
-*     [8] Cortes, David. "Distance approximation using Isolation Forests." arXiv preprint arXiv:1910.12362 (2019).
-*     [9] Cortes, David. "Imputing missing values with unsupervised random trees." arXiv preprint arXiv:1911.06646 (2019).
+*     [8] Cortes, David.
+*         "Distance approximation using Isolation Forests."
+*         arXiv preprint arXiv:1910.12362 (2019).
+*     [9] Cortes, David.
+*         "Imputing missing values with unsupervised random trees."
+*         arXiv preprint arXiv:1911.06646 (2019).
+*     [10] https://math.stackexchange.com/questions/3333220/expected-average-depth-in-random-binary-tree-constructed-top-to-bottom
+*     [11] Cortes, David.
+*          "Revisiting randomized choices in isolation forests."
+*          arXiv preprint arXiv:2110.13402 (2021).
+*     [12] Guha, Sudipto, et al.
+*          "Robust random cut forest based anomaly detection on streams."
+*          International conference on machine learning. PMLR, 2016.
+*     [13] Cortes, David.
+*          "Isolation forests: looking beyond tree depth."
+*          arXiv preprint arXiv:2111.11639 (2021).
 * 
 *     BSD 2-Clause License
-*     Copyright (c) 2019-2021, David Cortes
+*     Copyright (c) 2019-2022, David Cortes
 *     All rights reserved.
 *     Redistribution and use in source and binary forms, with or without
 *     modification, are permitted provided that the following conditions are met:
@@ -49,8 +63,8 @@
 /* This is only used for the serialiation format and might not reflect the
    actual version of the library, do not use for anything else. */
 #define ISOTREE_VERSION_MAJOR 0
-#define ISOTREE_VERSION_MINOR 3
-#define ISOTREE_VERSION_PATCH 6
+#define ISOTREE_VERSION_MINOR 4
+#define ISOTREE_VERSION_PATCH 3
 
 /* For MinGW, needs to be defined before including any headers */
 #if (defined(_WIN32) || defined(_WIN64)) && (SIZE_MAX >= UINT64_MAX)
@@ -205,6 +219,14 @@ using std::isnan;
     #define size_t_for size_t
 #endif
 
+/* MinGW has issues processing long doubles in parallel.
+   See https://sourceforge.net/p/mingw-w64/bugs/909/ */
+#if (defined(_WIN32) || defined(_WIN64)) && defined(_OPENMP) && (defined(__GNUC__) || defined(__GNUG__)) && !(defined(__clang__) || defined(__INTEL_COMPILER))
+    typedef double ldouble_safe;
+#else
+    typedef long double ldouble_safe;
+#endif
+
 #if defined(_FOR_R) || defined(_FOR_PYTHON) || !defined(_WIN32)
     #define ISOTREE_EXPORTED 
 #else
@@ -232,10 +254,17 @@ typedef enum  NewCategAction {Weighted=0,  Smallest=11,    Random=12}  NewCategA
 typedef enum  MissingAction  {Divide=21,   Impute=22,      Fail=0}     MissingAction;  /* Divide is only for non-extended model */
 typedef enum  ColType        {Numeric=31,  Categorical=32, NotUsed=0}  ColType;
 typedef enum  CategSplit     {SubSet=0,    SingleCateg=41}             CategSplit;
-typedef enum  GainCriterion  {Averaged=51, Pooled=52,      NoCrit=0}   Criterion;      /* For guided splits */
 typedef enum  CoefType       {Uniform=61,  Normal=0}                   CoefType;       /* For extended model */
 typedef enum  UseDepthImp    {Lower=71,    Higher=0,       Same=72}    UseDepthImp;    /* For NA imputation */
 typedef enum  WeighImpRows   {Inverse=0,   Prop=81,        Flat=82}    WeighImpRows;   /* For NA imputation */
+typedef enum  ScoringMetric  {Depth=0,     Density=92,     BoxedDensity=94, BoxedDensity2=96, BoxedRatio=95,
+                              AdjDepth=91, AdjDensity=93}              ScoringMetric;
+
+/* These are only used internally */
+typedef enum  GainCriterion  {Averaged=51, Pooled=52,      NoCrit=0}   Criterion;      /* For guided splits */
+typedef enum  ColCriterion   {Uniformly,   ByRange, ByVar, ByKurt}     ColCriterion;   /* For proportional choices */
+
+
 
 /* Notes about new categorical action:
 *  - For single-variable case, if using 'Smallest', can then pass data at prediction time
@@ -295,6 +324,7 @@ typedef struct IsoForest {
     NewCategAction    new_cat_action;
     CategSplit        cat_split_type;
     MissingAction     missing_action;
+    ScoringMetric     scoring_metric;
     double            exp_avg_depth;
     double            exp_avg_sep;
     size_t            orig_sample_size;
@@ -308,6 +338,7 @@ typedef struct ExtIsoForest {
     NewCategAction    new_cat_action;
     CategSplit        cat_split_type;
     MissingAction     missing_action;
+    ScoringMetric     scoring_metric;
     double            exp_avg_depth;
     double            exp_avg_sep;
     size_t            orig_sample_size;
@@ -366,6 +397,11 @@ struct InputData {
     std::vector<double> btree_weights_init;  /* only when using weights for sampling */
     std::vector<char>   has_missing;         /* only used when producing missing imputations on-the-fly */
     size_t              n_missing;           /* only used when producing missing imputations on-the-fly */
+    void*       preinitialized_col_sampler;  /* only when using column weights */
+    double*     range_low;   /* only when calculating variable ranges or boxed densities with no sub-sampling */
+    double*     range_high;  /* only when calculating variable ranges or boxed densities with no sub-sampling */
+    int*        ncat_;       /* only when calculating boxed densities with no sub-sampling */
+    std::vector<double> all_kurtoses; /* only when using 'prob_pick_col_by_kurtosis' or mixing 'weigh_by_kurt' with 'prob_pick_col*' with no sub-sampling */
 };
 
 
@@ -396,13 +432,16 @@ typedef struct {
     uint64_t  random_seed;
     bool      weigh_by_kurt;
     double    prob_pick_by_gain_avg;
-    double    prob_split_by_gain_avg;
     double    prob_pick_by_gain_pl;
-    double    prob_split_by_gain_pl;
+    double    prob_pick_col_by_range;
+    double    prob_pick_col_by_var;
+    double    prob_pick_col_by_kurt;
     double    min_gain;
     CategSplit      cat_split_type;
     NewCategAction  new_cat_action;
     MissingAction   missing_action;
+    ScoringMetric   scoring_metric;
+    bool            fast_bratio;
     bool            all_perm;
 
     size_t ndim;        /* only for extended model */
@@ -475,11 +514,180 @@ public:
     bool sample_col(size_t &col, RNG_engine &rnd_generator);
     void prepare_full_pass();        /* when passing through all columns */
     bool sample_col(size_t &col); /* when passing through all columns */
+    void drop_col(size_t col, size_t nobs_left);
     void drop_col(size_t col);
+    void drop_from_tail(size_t col);
     void shuffle_remainder(RNG_engine &rnd_generator);
     bool has_weights();
     size_t get_remaining_cols();
     ColumnSampler() = default;
+};
+
+class DensityCalculator
+{
+public:
+    std::vector<ldouble_safe> multipliers;
+    double xmin;
+    double xmax;
+    std::vector<size_t> counts;
+    int n_present;
+    int n_left;
+    std::vector<double> box_low;
+    std::vector<double> box_high;
+    std::vector<double> queue_box;
+    bool fast_bratio;
+    std::vector<ldouble_safe> ranges;
+    std::vector<int> ncat;
+    std::vector<int> queue_ncat;
+    std::vector<int> ncat_orig;
+    std::vector<double> vals_ext_box;
+    std::vector<double> queue_ext_box;
+    
+    void initialize(size_t max_depth, int max_categ, bool reserve_counts, ScoringMetric scoring_metric);
+    template <class InputData>
+    #ifndef _FOR_R
+    [[gnu::optimize("no-trapping-math"), gnu::optimize("no-math-errno")]]
+    #endif
+    void initialize_bdens(const InputData &input_data,
+                          const ModelParams &model_params,
+                          std::vector<size_t> &ix_arr,
+                          ColumnSampler &col_sampler);
+    template <class InputData>
+    void initialize_bdens_ext(const InputData &input_data,
+                              const ModelParams &model_params,
+                              std::vector<size_t> &ix_arr,
+                              ColumnSampler &col_sampler,
+                              bool col_sampler_is_fresh);
+    #ifndef _FOR_R
+    [[gnu::optimize("no-trapping-math"), gnu::optimize("no-math-errno")]]
+    #endif
+    void push_density(double xmin, double xmax, double split_point);
+    void push_density(size_t counts[], int ncat);
+    void push_density(int n_left, int n_present);
+    void push_density(int n_present);
+    void push_density();
+    void push_adj(double xmin, double xmax, double split_point, double pct_tree_left, ScoringMetric scoring_metric);
+    void push_adj(signed char *restrict categ_present, size_t *restrict counts, int ncat, ScoringMetric scoring_metric);
+    void push_adj(size_t *restrict counts, int ncat, int chosen_cat, ScoringMetric scoring_metric);
+    void push_adj(double pct_tree_left, ScoringMetric scoring_metric);
+    void push_bdens(double split_point, size_t col);
+    void push_bdens(int ncat_branch_left, size_t col);
+    void push_bdens(const std::vector<signed char> &cat_split, size_t col);
+    #ifndef _FOR_R
+    [[gnu::optimize("no-trapping-math"), gnu::optimize("no-math-errno")]]
+    #endif
+    void push_bdens_fast_route(double split_point, size_t col);
+    void push_bdens_internal(double split_point, size_t col);
+    #ifndef _FOR_R
+    [[gnu::optimize("no-trapping-math"), gnu::optimize("no-math-errno")]]
+    #endif
+    void push_bdens_fast_route(int ncat_branch_left, size_t col);
+    void push_bdens_internal(int ncat_branch_left, size_t col);
+    #ifndef _FOR_R
+    [[gnu::optimize("no-trapping-math"), gnu::optimize("no-math-errno")]]
+    #endif
+    void push_bdens_fast_route(const std::vector<signed char> &cat_split, size_t col);
+    void push_bdens_internal(const std::vector<signed char> &cat_split, size_t col);
+    #ifndef _FOR_R
+    [[gnu::optimize("no-trapping-math"), gnu::optimize("no-math-errno")]]
+    #endif
+    void push_bdens_ext(const IsoHPlane &hplane, const ModelParams &model_params);
+    void pop();
+    void pop_right();
+    void pop_bdens(size_t col);
+    void pop_bdens_right(size_t col);
+    void pop_bdens_cat(size_t col);
+    void pop_bdens_cat_right(size_t col);
+    void pop_bdens_fast_route(size_t col);
+    void pop_bdens_internal(size_t col);
+    void pop_bdens_right_fast_route(size_t col);
+    void pop_bdens_right_internal(size_t col);
+    void pop_bdens_cat_fast_route(size_t col);
+    void pop_bdens_cat_internal(size_t col);
+    void pop_bdens_cat_right_fast_route(size_t col);
+    void pop_bdens_cat_right_internal(size_t col);
+    void pop_bdens_ext();
+    void pop_bdens_ext_right();
+    #ifndef _FOR_R
+    [[gnu::optimize("no-trapping-math"), gnu::optimize("no-math-errno")]]
+    #endif
+    double calc_density(long double remainder, size_t sample_size);
+    ldouble_safe calc_adj_depth();
+    double calc_adj_density();
+    #ifndef _FOR_R
+    [[gnu::optimize("no-trapping-math"), gnu::optimize("no-math-errno")]]
+    #endif
+    ldouble_safe calc_bratio_log();
+    #ifndef _FOR_R
+    [[gnu::optimize("no-trapping-math"), gnu::optimize("no-math-errno")]]
+    #endif
+    ldouble_safe calc_bratio_inv_log();
+    #ifndef _FOR_R
+    [[gnu::optimize("no-trapping-math"), gnu::optimize("no-math-errno")]]
+    #endif
+    double calc_bratio();
+    #ifndef _FOR_R
+    [[gnu::optimize("no-trapping-math"), gnu::optimize("no-math-errno")]]
+    #endif
+    double calc_bdens(long double remainder, size_t sample_size);
+    #ifndef _FOR_R
+    [[gnu::optimize("no-trapping-math"), gnu::optimize("no-math-errno")]]
+    #endif
+    double calc_bdens2(long double remainder, size_t sample_size);
+    #ifndef _FOR_R
+    [[gnu::optimize("no-trapping-math"), gnu::optimize("no-math-errno")]]
+    #endif
+    ldouble_safe calc_bratio_log_ext();
+    #ifndef _FOR_R
+    [[gnu::optimize("no-trapping-math"), gnu::optimize("no-math-errno")]]
+    #endif
+    double calc_bratio_ext();
+    #ifndef _FOR_R
+    [[gnu::optimize("no-trapping-math"), gnu::optimize("no-math-errno")]]
+    #endif
+    double calc_bdens_ext(long double remainder, size_t sample_size);
+    void save_range(double xmin, double xmax);
+    void restore_range(double &restrict xmin, double &restrict xmax);
+    void save_counts(size_t *restrict cat_counts, int ncat);
+    void save_n_present_and_left(signed char *restrict split_left, int ncat);
+    void save_n_present(size_t *restrict cat_counts, int ncat);
+};
+
+class SingleNodeColumnSampler
+{
+public:
+    double *restrict weights_orig;
+    std::vector<bool> inifinite_weights;
+    ldouble_safe cumw;
+    size_t n_inf;
+    size_t *restrict col_indices;
+    size_t curr_pos;
+    bool using_tree;
+
+    bool backup_weights;
+    std::vector<double> weights_own;
+    size_t n_left;
+
+    std::vector<double> tree_weights;
+    size_t offset;
+    size_t tree_levels;
+    std::vector<double> used_weights;
+    std::vector<size_t> mapped_indices;
+    std::vector<size_t> mapped_inf_indices;
+
+    bool initialize(
+        double *restrict weights,
+        std::vector<size_t> *col_indices,
+        size_t curr_pos,
+        size_t n_sample,
+        bool backup_weights
+    );
+
+    bool sample_col(size_t &col_chosen, RNG_engine &rnd_generator);
+
+    void backup(SingleNodeColumnSampler &other, size_t ncols_tot);
+
+    void restore(const SingleNodeColumnSampler &other);
 };
 
 template <class ImputedData>
@@ -506,18 +714,33 @@ struct WorkerMemory {
     int                  ncat_tried;
     std::vector<double>  btree_weights;   /* only when using weights for sampling */
     ColumnSampler        col_sampler;     /* columns can get eliminated, keep a copy for each thread */
+    SingleNodeColumnSampler node_col_sampler;
+    SingleNodeColumnSampler node_col_sampler_backup;
 
     /* for split criterion */
     std::vector<double>  buffer_dbl;
     std::vector<size_t>  buffer_szt;
     std::vector<signed char> buffer_chr;
     double               prob_split_type;
+    ColCriterion         col_criterion;
     GainCriterion        criterion;
     double               this_gain;
     double               this_split_point;
     int                  this_categ;
     std::vector<signed char> this_split_categ;
     bool                 determine_split;
+    std::vector<double>  imputed_x_buffer;
+    double               saved_xmedian;
+    double               best_xmedian;
+    int                  saved_cat_mode;
+    int                  best_cat_mode;
+
+    /* for weighted column choices */
+    std::vector<double>  node_col_weights;
+    std::vector<double>  saved_stat1;
+    std::vector<double>  saved_stat2;
+    bool                 has_saved_stats;
+    double*              tree_kurtoses;  /* only when mixing 'weight_by_kurt' with 'prob_pick_col*' */
 
     /* for the extended model */
     size_t   ntry;
@@ -552,6 +775,8 @@ struct WorkerMemory {
     std::vector<ImputedData> impute_vec;
     hashed_map<size_t, ImputedData> impute_map;
 
+    /* for non-depth scoring metric */
+    DensityCalculator density_calculator;
 };
 
 typedef struct WorkerForSimilarity {
@@ -611,11 +836,13 @@ int fit_iforest(IsoForest *model_outputs, ExtIsoForest *model_outputs_ext,
                 size_t nrows, size_t sample_size, size_t ntrees,
                 size_t max_depth, size_t ncols_per_tree,
                 bool   limit_depth, bool penalize_range, bool standardize_data,
+                ScoringMetric scoring_metric, bool fast_bratio,
                 bool   standardize_dist, double tmat[],
                 double output_depths[], bool standardize_depth,
                 real_t col_weights[], bool weigh_by_kurt,
-                double prob_pick_by_gain_avg, double prob_split_by_gain_avg,
-                double prob_pick_by_gain_pl,  double prob_split_by_gain_pl,
+                double prob_pick_by_gain_pl, double prob_pick_by_gain_avg,
+                double prob_pick_col_by_range, double prob_pick_col_by_var,
+                double prob_pick_col_by_kurt,
                 double min_gain, MissingAction missing_action,
                 CategSplit cat_split_type, NewCategAction new_cat_action,
                 bool   all_perm, Imputer *imputer, size_t min_imp_obs,
@@ -630,9 +857,11 @@ int add_tree(IsoForest *model_outputs, ExtIsoForest *model_outputs_ext,
              real_t sample_weights[], size_t nrows,
              size_t max_depth,     size_t ncols_per_tree,
              bool   limit_depth,   bool penalize_range, bool standardize_data,
+             bool   fast_bratio,
              real_t col_weights[], bool weigh_by_kurt,
-             double prob_pick_by_gain_avg, double prob_split_by_gain_avg,
-             double prob_pick_by_gain_pl,  double prob_split_by_gain_pl,
+             double prob_pick_by_gain_pl, double prob_pick_by_gain_avg,
+             double prob_pick_col_by_range, double prob_pick_col_by_var,
+             double prob_pick_col_by_kurt,
              double min_gain, MissingAction missing_action,
              CategSplit cat_split_type, NewCategAction new_cat_action,
              UseDepthImp depth_imp, WeighImpRows weigh_imp_rows,
@@ -674,23 +903,28 @@ void simplify_hplane(IsoHPlane &hplane, WorkerMemory &workspace, InputData &inpu
 
 /* predict.cpp */
 template <class real_t, class sparse_ix>
-void predict_iforest(real_t numeric_data[], int categ_data[],
-                     bool is_col_major, size_t ncols_numeric, size_t ncols_categ,
-                     real_t Xc[], sparse_ix Xc_ind[], sparse_ix Xc_indptr[],
-                     real_t Xr[], sparse_ix Xr_ind[], sparse_ix Xr_indptr[],
+#ifndef _FOR_R
+[[gnu::optimize("no-trapping-math"), gnu::optimize("no-math-errno"), gnu::hot]]
+#endif
+void predict_iforest(real_t *restrict numeric_data, int *restrict categ_data,
+                     bool is_col_major, size_t ld_numeric, size_t ld_categ,
+                     real_t *restrict Xc, sparse_ix *restrict Xc_ind, sparse_ix *restrict Xc_indptr,
+                     real_t *restrict Xr, sparse_ix *restrict Xr_ind, sparse_ix *restrict Xr_indptr,
                      size_t nrows, int nthreads, bool standardize,
                      IsoForest *model_outputs, ExtIsoForest *model_outputs_ext,
-                     double output_depths[],   sparse_ix tree_num[],
-                     double per_tree_depths[]);
+                     double *restrict output_depths,   sparse_ix *restrict tree_num,
+                     double *restrict per_tree_depths);
 template <class PredictionData, class sparse_ix>
+[[gnu::hot]]
 void traverse_itree_no_recurse(std::vector<IsoTree>  &tree,
                                IsoForest             &model_outputs,
                                PredictionData        &prediction_data,
-                               double                &output_depth,
+                               double &restrict      output_depth,
                                sparse_ix *restrict   tree_num,
                                double *restrict      tree_depth,
                                size_t                row);
 template <class PredictionData, class sparse_ix, class ImputedData>
+[[gnu::hot]]
 double traverse_itree(std::vector<IsoTree>     &tree,
                       IsoForest                &model_outputs,
                       PredictionData           &prediction_data,
@@ -702,18 +936,20 @@ double traverse_itree(std::vector<IsoTree>     &tree,
                       double *restrict         tree_depth,
                       size_t                   curr_lev);
 template <class PredictionData, class sparse_ix>
+[[gnu::hot]]
 void traverse_hplane_fast(std::vector<IsoHPlane>  &hplane,
                           ExtIsoForest            &model_outputs,
                           PredictionData          &prediction_data,
-                          double                  &output_depth,
+                          double &restrict        output_depth,
                           sparse_ix *restrict     tree_num,
                           double *restrict        tree_depth,
                           size_t                  row);
 template <class PredictionData, class sparse_ix, class ImputedData>
+[[gnu::hot]]
 void traverse_hplane(std::vector<IsoHPlane>   &hplane,
                      ExtIsoForest             &model_outputs,
                      PredictionData           &prediction_data,
-                     double                   &output_depth,
+                     double &restrict         output_depth,
                      std::vector<ImputeNode> *impute_nodes,
                      ImputedData             *imputed_data,
                      sparse_ix *restrict      tree_num,
@@ -722,15 +958,15 @@ void traverse_hplane(std::vector<IsoHPlane>   &hplane,
 template <class real_t, class sparse_ix>
 void batched_csc_predict(PredictionData<real_t, sparse_ix> &prediction_data, int nthreads,
                          IsoForest *model_outputs, ExtIsoForest *model_outputs_ext,
-                         double output_depths[],   sparse_ix tree_num[],
-                         double per_tree_depths[]);
+                         double *restrict output_depths,   sparse_ix *restrict tree_num,
+                         double *restrict per_tree_depths);
 template <class PredictionData, class sparse_ix>
 void traverse_itree_csc(WorkerForPredictCSC   &workspace,
                         std::vector<IsoTree>  &trees,
                         IsoForest             &model_outputs,
                         PredictionData        &prediction_data,
-                        sparse_ix             *tree_num,
-                        double                *per_tree_depths,
+                        sparse_ix *restrict   tree_num,
+                        double *restrict      per_tree_depths,
                         size_t                curr_tree,
                         bool                  has_range_penalty);
 template <class PredictionData, class sparse_ix>
@@ -738,14 +974,14 @@ void traverse_hplane_csc(WorkerForPredictCSC      &workspace,
                          std::vector<IsoHPlane>   &hplanes,
                          ExtIsoForest             &model_outputs,
                          PredictionData           &prediction_data,
-                         sparse_ix                *tree_num,
-                         double                   *per_tree_depths,
+                         sparse_ix *restrict      tree_num,
+                         double *restrict         per_tree_depths,
                          size_t                   curr_tree,
                          bool                     has_range_penalty);
 template <class PredictionData>
 void add_csc_range_penalty(WorkerForPredictCSC  &workspace,
                            PredictionData       &prediction_data,
-                           double               *weights_arr,
+                           double *restrict     weights_arr,
                            size_t               col_num,
                            double               range_low,
                            double               range_high);
@@ -812,7 +1048,7 @@ void drop_nonterminal_imp_node(std::vector<ImputeNode>  &imputer_tree,
                                std::vector<IsoTree>     *trees,
                                std::vector<IsoHPlane>   *hplanes);
 template <class ImputedData>
-void combine_imp_single(ImputedData &imp_addfrom, ImputedData &imp_addto);
+void combine_imp_single(ImputedData &restrict imp_addfrom, ImputedData &restrict imp_addto);
 template <class ImputedData, class WorkerMemory>
 void combine_tree_imputations(WorkerMemory &workspace,
                               std::vector<ImputedData> &impute_vec,
@@ -869,12 +1105,17 @@ void get_split_range(WorkerMemory &workspace, InputData &input_data, ModelParams
 template <class InputData, class WorkerMemory>
 void get_split_range(WorkerMemory &workspace, InputData &input_data, ModelParams &model_params);
 template <class InputData, class WorkerMemory>
+void get_split_range_v2(WorkerMemory &workspace, InputData &input_data, ModelParams &model_params);
+template <class InputData, class WorkerMemory>
 int choose_cat_from_present(WorkerMemory &workspace, InputData &input_data, size_t col_num);
 bool is_col_taken(std::vector<bool> &col_is_taken, hashed_set<size_t> &col_is_taken_s,
                   size_t col_num);
 template <class InputData>
 void set_col_as_taken(std::vector<bool> &col_is_taken, hashed_set<size_t> &col_is_taken_s,
                       InputData &input_data, size_t col_num, ColType col_type);
+template <class InputData>
+void set_col_as_taken(std::vector<bool> &col_is_taken, hashed_set<size_t> &col_is_taken_s,
+                      InputData &input_data, size_t col_num);
 template <class InputData, class WorkerMemory>
 void add_separation_step(WorkerMemory &workspace, InputData &input_data, double remainder);
 template <class InputData, class WorkerMemory>
@@ -882,14 +1123,33 @@ void add_remainder_separation_steps(WorkerMemory &workspace, InputData &input_da
 template <class PredictionData, class sparse_ix>
 void remap_terminal_trees(IsoForest *model_outputs, ExtIsoForest *model_outputs_ext,
                           PredictionData &prediction_data, sparse_ix *restrict tree_num, int nthreads);
+template <class InputData>
+std::vector<double> calc_kurtosis_all_data(InputData &input_data, ModelParams &model_params, RNG_engine &rnd_generator);
+template <class InputData, class WorkerMemory>
+void calc_ranges_all_cols(InputData &input_data, WorkerMemory &workspace, ModelParams &model_params,
+                          double *restrict ranges, double *restrict saved_xmin, double *restrict saved_xmax);
+template <class InputData, class WorkerMemory>
+void calc_var_all_cols(InputData &input_data, WorkerMemory &workspace, ModelParams &model_params,
+                       double *restrict variances, double *restrict saved_xmin, double *restrict saved_xmax,
+                       double *restrict saved_means, double *restrict saved_sds);
+template <class InputData, class WorkerMemory>
+void calc_kurt_all_cols(InputData &input_data, WorkerMemory &workspace, ModelParams &model_params,
+                        double *restrict kurtosis, double *restrict saved_xmin, double *restrict saved_xmax);
+bool is_boxed_metric(const ScoringMetric scoring_metric);
 
 
 /* utils.cpp */
 size_t log2ceil(size_t x);
+#ifndef _FOR_R
+[[gnu::optimize("no-trapping-math"), gnu::optimize("no-math-errno")]]
+#endif
 double digamma(double x);
 double harmonic(size_t n);
 double harmonic_recursive(double a, double b);
 double expected_avg_depth(size_t sample_size);
+#ifndef _FOR_R
+[[gnu::optimize("no-trapping-math"), gnu::optimize("no-math-errno")]]
+#endif
 double expected_avg_depth(long double approx_sample_size);
 double expected_separation_depth(size_t n);
 double expected_separation_depth_hotstart(double curr, size_t n_curr, size_t n_final);
@@ -906,49 +1166,64 @@ void increase_comb_counter_in_groups(size_t ix_arr[], size_t st, size_t end, siz
 void tmat_to_dense(double *restrict tmat, double *restrict dmat, size_t n, bool diag_to_one);
 template <class real_t=double>
 void build_btree_sampler(std::vector<double> &btree_weights, real_t *restrict sample_weights,
-                         size_t nrows, size_t &log2_n, size_t &btree_offset);
+                         size_t nrows, size_t &restrict log2_n, size_t &restrict btree_offset);
 template <class real_t=double>
-void sample_random_rows(std::vector<size_t> &ix_arr, size_t nrows, bool with_replacement,
-                        RNG_engine &rnd_generator, std::vector<size_t> &ix_all,
-                        real_t sample_weights[], std::vector<double> &btree_weights,
+void sample_random_rows(std::vector<size_t> &restrict ix_arr, size_t nrows, bool with_replacement,
+                        RNG_engine &rnd_generator, std::vector<size_t> &restrict ix_all,
+                        real_t *restrict sample_weights, std::vector<double> &restrict btree_weights,
                         size_t log2_n, size_t btree_offset, std::vector<bool> &is_repeated);
 template <class real_t=double>
 void weighted_shuffle(size_t *restrict outp, size_t n, real_t *restrict weights, double *restrict buffer_arr, RNG_engine &rnd_generator);
 double sample_random_uniform(double xmin, double xmax, RNG_engine &rng);
 size_t divide_subset_split(size_t ix_arr[], double x[], size_t st, size_t end, double split_point);
 template <class real_t=double>
-void divide_subset_split(size_t ix_arr[], real_t x[], size_t st, size_t end, double split_point,
-                         MissingAction missing_action, size_t &st_NA, size_t &end_NA, size_t &split_ix);
+void divide_subset_split(size_t *restrict ix_arr, real_t x[], size_t st, size_t end, double split_point,
+                         MissingAction missing_action, size_t &restrict st_NA, size_t &restrict end_NA, size_t &restrict split_ix);
 template <class real_t, class sparse_ix>
-void divide_subset_split(size_t ix_arr[], size_t st, size_t end, size_t col_num,
-                         real_t Xc[], sparse_ix Xc_ind[], sparse_ix Xc_indptr[], double split_point,
-                         MissingAction missing_action, size_t &st_NA, size_t &end_NA, size_t &split_ix);
-void divide_subset_split(size_t ix_arr[], int x[], size_t st, size_t end, signed char split_categ[],
-                         MissingAction missing_action, size_t &st_NA, size_t &end_NA, size_t &split_ix);
-void divide_subset_split(size_t ix_arr[], int x[], size_t st, size_t end, signed char split_categ[],
+void divide_subset_split(size_t *restrict ix_arr, size_t st, size_t end, size_t col_num,
+                         real_t Xc[], sparse_ix *restrict Xc_ind, sparse_ix *restrict Xc_indptr, double split_point,
+                         MissingAction missing_action, size_t &restrict st_NA, size_t &restrict end_NA, size_t &restrict split_ix);
+void divide_subset_split(size_t *restrict ix_arr, int x[], size_t st, size_t end, signed char split_categ[],
+                         MissingAction missing_action, size_t &restrict st_NA, size_t &restrict end_NA, size_t &restrict split_ix);
+void divide_subset_split(size_t *restrict ix_arr, int x[], size_t st, size_t end, signed char split_categ[],
                          int ncat, MissingAction missing_action, NewCategAction new_cat_action,
-                         bool move_new_to_left, size_t &st_NA, size_t &end_NA, size_t &split_ix);
-void divide_subset_split(size_t ix_arr[], int x[], size_t st, size_t end, int split_categ,
-                         MissingAction missing_action, size_t &st_NA, size_t &end_NA, size_t &split_ix);
-void divide_subset_split(size_t ix_arr[], int x[], size_t st, size_t end,
+                         bool move_new_to_left, size_t &restrict st_NA, size_t &restrict end_NA, size_t &restrict split_ix);
+void divide_subset_split(size_t *restrict ix_arr, int x[], size_t st, size_t end, int split_categ,
+                         MissingAction missing_action, size_t &restrict st_NA, size_t &restrict end_NA, size_t &restrict split_ix);
+void divide_subset_split(size_t *restrict ix_arr, int x[], size_t st, size_t end,
                          MissingAction missing_action, NewCategAction new_cat_action,
-                         bool move_new_to_left, size_t &st_NA, size_t &end_NA, size_t &split_ix);
+                         bool move_new_to_left, size_t &restrict st_NA, size_t &restrict end_NA, size_t &restrict split_ix);
 template <class real_t=double>
-void get_range(size_t ix_arr[], real_t x[], size_t st, size_t end,
-               MissingAction missing_action, double &xmin, double &xmax, bool &unsplittable);
+void get_range(size_t ix_arr[], real_t *restrict x, size_t st, size_t end,
+               MissingAction missing_action, double &restrict xmin, double &restrict xmax, bool &unsplittable);
+template <class real_t>
+void get_range(real_t *restrict x, size_t n,
+               MissingAction missing_action, double &restrict xmin, double &restrict xmax, bool &unsplittable);
 template <class real_t, class sparse_ix>
-void get_range(size_t ix_arr[], size_t st, size_t end, size_t col_num,
-               real_t Xc[], sparse_ix Xc_ind[], sparse_ix Xc_indptr[],
-               MissingAction missing_action, double &xmin, double &xmax, bool &unsplittable);
-void get_categs(size_t ix_arr[], int x[], size_t st, size_t end, int ncat,
-                MissingAction missing_action, signed char categs[], size_t &npresent, bool &unsplittable);
-#if !defined(_WIN32) && !defined(_WIN64)
-long double calculate_sum_weights(std::vector<size_t> &ix_arr, size_t st, size_t end, size_t curr_depth,
-                                  std::vector<double> &weights_arr, hashed_map<size_t, double> &weights_map);
-#else
-     double calculate_sum_weights(std::vector<size_t> &ix_arr, size_t st, size_t end, size_t curr_depth,
-                                  std::vector<double> &weights_arr, hashed_map<size_t, double> &weights_map);
-#endif
+void get_range(size_t *restrict ix_arr, size_t st, size_t end, size_t col_num,
+               real_t *restrict Xc, sparse_ix *restrict Xc_ind, sparse_ix *restrict Xc_indptr,
+               MissingAction missing_action, double &restrict xmin_, double &restrict xmax_, bool &unsplittable);
+template <class real_t, class sparse_ix>
+void get_range(size_t col_num, size_t nrows,
+               real_t *restrict Xc, sparse_ix *restrict Xc_ind, sparse_ix *restrict Xc_indptr,
+               MissingAction missing_action, double &restrict xmin, double &restrict xmax, bool &unsplittable);
+void get_categs(size_t *restrict ix_arr, int x[], size_t st, size_t end, int ncat,
+                MissingAction missing_action, signed char categs[], size_t &restrict npresent, bool &unsplittable);
+template <class real_t>
+bool check_more_than_two_unique_values(size_t ix_arr[], size_t st, size_t end, real_t x[], MissingAction missing_action);
+bool check_more_than_two_unique_values(size_t ix_arr[], size_t st, size_t end, int x[], MissingAction missing_action);
+template <class real_t, class sparse_ix>
+bool check_more_than_two_unique_values(size_t *restrict ix_arr, size_t st, size_t end, size_t col,
+                                       sparse_ix *restrict Xc_indptr, sparse_ix *restrict Xc_ind, real_t *restrict Xc,
+                                       MissingAction missing_action);
+template <class real_t, class sparse_ix>
+bool check_more_than_two_unique_values(size_t nrows, size_t col,
+                                       sparse_ix *restrict Xc_indptr, sparse_ix *restrict Xc_ind, real_t *restrict Xc,
+                                       MissingAction missing_action);
+void count_categs(size_t *restrict ix_arr, size_t st, size_t end, int x[], int ncat, size_t *restrict counts);
+int count_ncateg_in_col(const int x[], const size_t n, const int ncat, unsigned char buffer[]);
+ldouble_safe calculate_sum_weights(std::vector<size_t> &ix_arr, size_t st, size_t end, size_t curr_depth,
+                                   std::vector<double> &weights_arr, hashed_map<size_t, double> &weights_map);
 extern bool interrupt_switch;
 extern bool signal_is_locked;
 void set_interrup_global_variable(int s);
@@ -974,12 +1249,15 @@ int return_EXIT_FAILURE();
 template <class real_t=double>
 size_t move_NAs_to_front(size_t ix_arr[], size_t st, size_t end, real_t x[]);
 template <class real_t, class sparse_ix>
-size_t move_NAs_to_front(size_t ix_arr[], size_t st, size_t end, size_t col_num, real_t Xc[], sparse_ix Xc_ind[], sparse_ix Xc_indptr[]);
+size_t move_NAs_to_front(size_t *restrict ix_arr, size_t st, size_t end, size_t col_num, real_t Xc[], sparse_ix *restrict Xc_ind, sparse_ix *restrict Xc_indptr);
 size_t move_NAs_to_front(size_t ix_arr[], size_t st, size_t end, int x[]);
-size_t center_NAs(size_t *restrict ix_arr, size_t st_left, size_t st, size_t curr_pos);
+size_t center_NAs(size_t ix_arr[], size_t st_left, size_t st, size_t curr_pos);
+template <class real_t>
+void fill_NAs_with_median(size_t *restrict ix_arr, size_t st_orig, size_t st, size_t end, real_t *restrict x,
+                          double *restrict buffer_imputed_x, double *restrict xmedian);
 template <class real_t, class sparse_ix>
-void todense(size_t ix_arr[], size_t st, size_t end,
-             size_t col_num, real_t *restrict Xc, sparse_ix Xc_ind[], sparse_ix Xc_indptr[],
+void todense(size_t *restrict ix_arr, size_t st, size_t end,
+             size_t col_num, real_t *restrict Xc, sparse_ix *restrict Xc_ind, sparse_ix *restrict Xc_indptr,
              double *restrict buffer_arr);
 template <class sparse_ix=size_t>
 bool check_indices_are_sorted(sparse_ix indices[], size_t n);
@@ -989,99 +1267,137 @@ void sort_csc_indices(real_t *restrict Xc, sparse_ix *restrict Xc_ind, sparse_ix
 /* mult.cpp */
 template <class real_t, class real_t_>
 void calc_mean_and_sd_t(size_t ix_arr[], size_t st, size_t end, real_t_ *restrict x,
-                        MissingAction missing_action, double &x_sd, double &x_mean);
+                        MissingAction missing_action, double &restrict x_sd, double &restrict x_mean);
 template <class real_t_>
 void calc_mean_and_sd(size_t ix_arr[], size_t st, size_t end, real_t_ *restrict x,
-                      MissingAction missing_action, double &x_sd, double &x_mean);
+                      MissingAction missing_action, double &restrict x_sd, double &restrict x_mean);
 template <class real_t_>
 double calc_mean_only(size_t ix_arr[], size_t st, size_t end, real_t_ *restrict x);
 template <class real_t_, class mapping>
-void calc_mean_and_sd_weighted(size_t ix_arr[], size_t st, size_t end, real_t_ *restrict x, mapping w,
-                               MissingAction missing_action, double &x_sd, double &x_mean);
+void calc_mean_and_sd_weighted(size_t ix_arr[], size_t st, size_t end, real_t_ *restrict x, mapping &w,
+                               MissingAction missing_action, double &restrict x_sd, double &restrict x_mean);
 template <class real_t_, class mapping>
-double calc_mean_only_weighted(size_t ix_arr[], size_t st, size_t end, real_t_ *restrict x, mapping w);
+double calc_mean_only_weighted(size_t ix_arr[], size_t st, size_t end, real_t_ *restrict x, mapping &w);
+template <class real_t_, class sparse_ix, class real_t>
+void calc_mean_and_sd(size_t *restrict ix_arr, size_t st, size_t end, size_t col_num,
+                      real_t_ *restrict Xc, sparse_ix *restrict Xc_ind, sparse_ix *restrict Xc_indptr,
+                      double &restrict x_sd, double &restrict x_mean);
 template <class real_t_, class sparse_ix>
-void calc_mean_and_sd(size_t ix_arr[], size_t st, size_t end, size_t col_num,
-                      real_t_ *restrict Xc, sparse_ix Xc_ind[], sparse_ix Xc_indptr[],
-                      double &x_sd, double &x_mean);
+void calc_mean_and_sd(size_t *restrict ix_arr, size_t st, size_t end, size_t col_num,
+                      real_t_ *restrict Xc, sparse_ix *restrict Xc_ind, sparse_ix *restrict Xc_indptr,
+                      double &restrict x_sd, double &restrict x_mean);
 template <class real_t_, class sparse_ix>
-double calc_mean_only(size_t ix_arr[], size_t st, size_t end, size_t col_num,
-                      real_t_ *restrict Xc, sparse_ix Xc_ind[], sparse_ix Xc_indptr[]);
+double calc_mean_only(size_t *restrict ix_arr, size_t st, size_t end, size_t col_num,
+                      real_t_ *restrict Xc, sparse_ix *restrict Xc_ind, sparse_ix *restrict Xc_indptr);
 template <class real_t_, class sparse_ix, class mapping>
-void calc_mean_and_sd_weighted(size_t ix_arr[], size_t st, size_t end, size_t col_num,
-                               real_t_ *restrict Xc, sparse_ix Xc_ind[], sparse_ix Xc_indptr[],
-                               double &x_sd, double &x_mean, mapping w);
+void calc_mean_and_sd_weighted(size_t *restrict ix_arr, size_t st, size_t end, size_t col_num,
+                               real_t_ *restrict Xc, sparse_ix *restrict Xc_ind, sparse_ix *restrict Xc_indptr,
+                               double &restrict x_sd, double &restrict x_mean, mapping &w);
 template <class real_t_, class sparse_ix, class mapping>
-double calc_mean_only_weighted(size_t ix_arr[], size_t st, size_t end, size_t col_num,
-                               real_t_ *restrict Xc, sparse_ix Xc_ind[], sparse_ix Xc_indptr[],
-                               mapping w);
+double calc_mean_only_weighted(size_t *restrict ix_arr, size_t st, size_t end, size_t col_num,
+                               real_t_ *restrict Xc, sparse_ix *restrict Xc_ind, sparse_ix *restrict Xc_indptr,
+                               mapping &w);
 template <class real_t_>
 void add_linear_comb(size_t ix_arr[], size_t st, size_t end, double *restrict res,
-                     real_t_ *restrict x, double &coef, double x_sd, double x_mean, double &fill_val,
+                     real_t_ *restrict x, double &restrict coef, double x_sd, double x_mean, double &restrict fill_val,
                      MissingAction missing_action, double *restrict buffer_arr,
                      size_t *restrict buffer_NAs, bool first_run);
 template <class real_t_, class mapping>
 void add_linear_comb_weighted(size_t ix_arr[], size_t st, size_t end, double *restrict res,
-                              real_t_ *restrict x, double &coef, double x_sd, double x_mean, double &fill_val,
+                              real_t_ *restrict x, double &restrict coef, double x_sd, double x_mean, double &restrict fill_val,
                               MissingAction missing_action, double *restrict buffer_arr,
-                              size_t *restrict buffer_NAs, bool first_run, mapping w);
+                              size_t *restrict buffer_NAs, bool first_run, mapping &w);
 template <class real_t_, class sparse_ix>
 void add_linear_comb(size_t *restrict ix_arr, size_t st, size_t end, size_t col_num, double *restrict res,
                      real_t_ *restrict Xc, sparse_ix *restrict Xc_ind, sparse_ix *restrict Xc_indptr,
-                     double &coef, double x_sd, double x_mean, double &fill_val, MissingAction missing_action,
+                     double &restrict coef, double x_sd, double x_mean, double &restrict fill_val, MissingAction missing_action,
                      double *restrict buffer_arr, size_t *restrict buffer_NAs, bool first_run);
 template <class real_t_, class sparse_ix, class mapping>
 void add_linear_comb_weighted(size_t *restrict ix_arr, size_t st, size_t end, size_t col_num, double *restrict res,
                               real_t_ *restrict Xc, sparse_ix *restrict Xc_ind, sparse_ix *restrict Xc_indptr,
-                              double &coef, double x_sd, double x_mean, double &fill_val, MissingAction missing_action,
-                              double *restrict buffer_arr, size_t *restrict buffer_NAs, bool first_run, mapping w);
-void add_linear_comb(size_t *restrict ix_arr, size_t st, size_t end, double *restrict res,
-                     int x[], int ncat, double *restrict cat_coef, double single_cat_coef, int chosen_cat,
-                     double &fill_val, double &fill_new, size_t *restrict buffer_cnt, size_t *restrict buffer_pos,
-                     NewCategAction new_cat_action, MissingAction missing_action, CategSplit cat_split_type, bool first_run);
+                              double &restrict coef, double x_sd, double x_mean, double &restrict fill_val, MissingAction missing_action,
+                              double *restrict buffer_arr, size_t *restrict buffer_NAs, bool first_run, mapping &w);
 template <class mapping>
 void add_linear_comb_weighted(size_t *restrict ix_arr, size_t st, size_t end, double *restrict res,
                               int x[], int ncat, double *restrict cat_coef, double single_cat_coef, int chosen_cat,
-                              double &fill_val, double &fill_new, size_t *restrict buffer_pos,
+                              double &restrict fill_val, double &restrict fill_new, size_t *restrict buffer_pos,
                               NewCategAction new_cat_action, MissingAction missing_action, CategSplit cat_split_type,
-                              bool first_run, mapping w);
+                              bool first_run, mapping &w);
 
 /* crit.cpp */
 template <class real_t=double>
 double calc_kurtosis(size_t ix_arr[], size_t st, size_t end, real_t x[], MissingAction missing_action);
+template <class real_t>
+double calc_kurtosis(real_t x[], size_t n, MissingAction missing_action);
 template <class real_t, class mapping>
 double calc_kurtosis_weighted(size_t ix_arr[], size_t st, size_t end, real_t x[],
-                              MissingAction missing_action, mapping w);
+                              MissingAction missing_action, mapping &w);
+template <class real_t>
+double calc_kurtosis_weighted(real_t *restrict x, size_t n_, MissingAction missing_action, real_t *restrict w);
 template <class real_t, class sparse_ix>
-double calc_kurtosis(size_t ix_arr[], size_t st, size_t end, size_t col_num,
-                     real_t Xc[], sparse_ix Xc_ind[], sparse_ix Xc_indptr[],
+double calc_kurtosis(size_t *restrict ix_arr, size_t st, size_t end, size_t col_num,
+                     real_t Xc[], sparse_ix *restrict Xc_ind, sparse_ix *restrict Xc_indptr,
                      MissingAction missing_action);
+template <class real_t, class sparse_ix>
+double calc_kurtosis(size_t col_num, size_t nrows,
+                     real_t Xc[], sparse_ix *restrict Xc_ind, sparse_ix *restrict Xc_indptr,
+                     MissingAction missing_action);
+template <class real_t, class sparse_ix>
+double calc_kurtosis_weighted(size_t col_num, size_t nrows,
+                              real_t *restrict Xc, sparse_ix *restrict Xc_ind, sparse_ix *restrict Xc_indptr,
+                              MissingAction missing_action, real_t *restrict w);
 template <class real_t, class sparse_ix, class mapping>
-double calc_kurtosis_weighted(size_t ix_arr[], size_t st, size_t end, size_t col_num,
-                              real_t Xc[], sparse_ix Xc_ind[], sparse_ix Xc_indptr[],
-                              MissingAction missing_action, mapping w);
-double calc_kurtosis(size_t ix_arr[], size_t st, size_t end, int x[], int ncat, size_t buffer_cnt[], double buffer_prob[],
+double calc_kurtosis_weighted(size_t col_num, size_t nrows,
+                              real_t Xc[], sparse_ix *restrict Xc_ind, sparse_ix *restrict Xc_indptr,
+                              MissingAction missing_action, mapping &w);
+double calc_kurtosis_internal(size_t cnt, int x[], int ncat, size_t buffer_cnt[], double buffer_prob[],
+                              MissingAction missing_action, CategSplit cat_split_type, RNG_engine &rnd_generator);
+double calc_kurtosis(size_t *restrict ix_arr, size_t st, size_t end, int x[], int ncat, size_t *restrict buffer_cnt, double buffer_prob[],
+                     MissingAction missing_action, CategSplit cat_split_type, RNG_engine &rnd_generator);
+double calc_kurtosis(size_t nrows, int x[], int ncat, size_t buffer_cnt[], double buffer_prob[],
                      MissingAction missing_action, CategSplit cat_split_type, RNG_engine &rnd_generator);
 template <class mapping>
+double calc_kurtosis_weighted_internal(std::vector<ldouble_safe> &buffer_cnt, int x[], int ncat,
+                                       double buffer_prob[], MissingAction missing_action, CategSplit cat_split_type,
+                                       RNG_engine &rnd_generator, mapping &w);
+template <class mapping>
 double calc_kurtosis_weighted(size_t ix_arr[], size_t st, size_t end, int x[], int ncat, double buffer_prob[],
-                              MissingAction missing_action, CategSplit cat_split_type, RNG_engine &rnd_generator, mapping w);
+                              MissingAction missing_action, CategSplit cat_split_type, RNG_engine &rnd_generator, mapping &w);
+template <class real_t>
+double calc_kurtosis_weighted(size_t nrows, int x[], int ncat, double *restrict buffer_prob,
+                              MissingAction missing_action, CategSplit cat_split_type,
+                              RNG_engine &rnd_generator, real_t *restrict w);
 double expected_sd_cat(double p[], size_t n, size_t pos[]);
 template <class number>
-double expected_sd_cat(number counts[], double p[], size_t n, size_t pos[]);
+double expected_sd_cat(number *restrict counts, double *restrict p, size_t n, size_t *restrict pos);
 template <class number>
-double expected_sd_cat_single(number counts[], double p[], size_t n, size_t pos[], size_t cat_exclude, number cnt);
+double expected_sd_cat_single(number *restrict counts, double *restrict p, size_t n, size_t *restrict pos, size_t cat_exclude, number cnt);
+template <class number>
+double expected_sd_cat_internal(int ncat, number *restrict buffer_cnt, long double cnt_l,
+                                size_t *restrict buffer_pos, double *restrict buffer_prob);
+double expected_sd_cat(size_t *restrict ix_arr, size_t st, size_t end, int x[], int ncat,
+                       MissingAction missing_action,
+                       size_t *restrict buffer_cnt, size_t *restrict buffer_pos, double buffer_prob[]);
+template <class mapping>
+double expected_sd_cat_weighted(size_t *restrict ix_arr, size_t st, size_t end, int x[], int ncat,
+                                MissingAction missing_action, mapping &w,
+                                double *restrict buffer_cnt, size_t *restrict buffer_pos, double *restrict buffer_prob);
 template <class number>
 double categ_gain(number cnt_left, number cnt_right,
                   long double s_left, long double s_right,
                   long double base_info, long double cnt);
-template <class real_t, class real_t_=double>
-double find_split_rel_gain_t(real_t_ *restrict x, size_t n, double &split_point);
-template <class real_t_=double>
-double find_split_rel_gain(real_t_ *restrict x, size_t n, double &split_point);
 template <class real_t, class real_t_>
-double find_split_rel_gain_t(real_t_ *restrict x, real_t_ xmean, size_t ix_arr[], size_t st, size_t end, double &split_point, size_t &split_ix);
+double find_split_rel_gain_t(real_t_ *restrict x, size_t n, double &restrict split_point);
+template <class real_t_>
+double find_split_rel_gain(real_t_ *restrict x, real_t_ xmean, size_t *restrict ix_arr, size_t st, size_t end, double &restrict split_point, size_t &restrict split_ix);
+template <class real_t, class real_t_>
+double find_split_rel_gain_t(real_t_ *restrict x, real_t_ xmean, size_t *restrict ix_arr, size_t st, size_t end, double &split_point, size_t &restrict split_ix);
 template <class real_t_=double>
 double find_split_rel_gain(real_t_ *restrict x, real_t_ xmean, size_t ix_arr[], size_t st, size_t end, double &split_point, size_t &split_ix);
+template <class real_t, class real_t_, class mapping>
+double find_split_rel_gain_weighted_t(real_t_ *restrict x, real_t_ xmean, size_t *restrict ix_arr, size_t st, size_t end, double &split_point, size_t &restrict split_ix, mapping &w);
+template <class real_t_, class mapping>
+double find_split_rel_gain_weighted(real_t_ *restrict x, real_t_ xmean, size_t *restrict ix_arr, size_t st, size_t end, double &restrict split_point, size_t &restrict split_ix, mapping &w);
 template <class real_t, class real_t_=double>
 real_t calc_sd_right_to_left(real_t_ *restrict x, size_t n, double *restrict sd_arr);
 template <class real_t_>
@@ -1091,69 +1407,75 @@ template <class real_t, class real_t_>
 real_t calc_sd_right_to_left(real_t_ *restrict x, real_t_ xmean, size_t ix_arr[], size_t st, size_t end, double *restrict sd_arr);
 template <class real_t_, class mapping>
 long double calc_sd_right_to_left_weighted(real_t_ *restrict x, real_t_ xmean, size_t ix_arr[], size_t st, size_t end,
-                                           double *restrict sd_arr, mapping w, long double &cumw);
+                                           double *restrict sd_arr, mapping &w, long double &cumw);
 template <class real_t, class real_t_>
 double find_split_std_gain_t(real_t_ *restrict x, size_t n, double *restrict sd_arr,
-                             GainCriterion criterion, double min_gain, double &split_point);
+                             GainCriterion criterion, double min_gain, double &restrict split_point);
 template <class real_t_=double>
 double find_split_std_gain(real_t_ *restrict x, size_t n, double *restrict sd_arr,
-                           GainCriterion criterion, double min_gain, double &split_point);
+                           GainCriterion criterion, double min_gain, double &restrict split_point);
 template <class real_t>
 double find_split_std_gain_weighted(real_t *restrict x, size_t n, double *restrict sd_arr,
-                                    GainCriterion criterion, double min_gain, double &split_point,
+                                    GainCriterion criterion, double min_gain, double &restrict split_point,
                                     double *restrict w, size_t *restrict sorted_ix);
 template <class real_t, class real_t_>
 double find_split_std_gain_t(real_t_ *restrict x, real_t_ xmean, size_t ix_arr[], size_t st, size_t end, double *restrict sd_arr,
-                             GainCriterion criterion, double min_gain, double &split_point, size_t &split_ix);
+                             GainCriterion criterion, double min_gain, double &restrict split_point, size_t &restrict split_ix);
 template <class real_t_>
 double find_split_std_gain(real_t_ *restrict x, real_t_ xmean, size_t ix_arr[], size_t st, size_t end, double *restrict sd_arr,
-                           GainCriterion criterion, double min_gain, double &split_point, size_t &split_ix);
+                           GainCriterion criterion, double min_gain, double &restrict split_point, size_t &restrict split_ix);
 template <class real_t, class mapping>
 double find_split_std_gain_weighted(real_t *restrict x, real_t xmean, size_t ix_arr[], size_t st, size_t end, double *restrict sd_arr,
-                                    GainCriterion criterion, double min_gain, double &split_point, size_t &split_ix, mapping w);
+                                    GainCriterion criterion, double min_gain, double &restrict split_point, size_t &restrict split_ix, mapping &w);
 double eval_guided_crit(double *restrict x, size_t n, GainCriterion criterion,
                         double min_gain, bool as_relative_gain, double *restrict buffer_sd,
-                        double &split_point, double &xmin, double &xmax);
+                        double &restrict split_point, double &restrict xmin, double &restrict xmax);
 double eval_guided_crit_weighted(double *restrict x, size_t n, GainCriterion criterion,
                                  double min_gain, bool as_relative_gain, double *restrict buffer_sd,
-                                 double &split_point, double &xmin, double &xmax,
+                                 double &restrict split_point, double &restrict xmin, double &restrict xmax,
                                  double *restrict w, size_t *restrict buffer_indices);
 template <class real_t_>
 double eval_guided_crit(size_t *restrict ix_arr, size_t st, size_t end, real_t_ *restrict x,
                         double *restrict buffer_sd, bool as_relative_gain,
-                        size_t &split_ix, double &split_point, double &xmin, double &xmax,
+                        double *restrict buffer_imputed_x, double *restrict saved_xmedian,
+                        size_t &split_ix, double &restrict split_point, double &restrict xmin, double &restrict xmax,
                         GainCriterion criterion, double min_gain, MissingAction missing_action);
 template <class real_t_, class mapping>
 double eval_guided_crit_weighted(size_t *restrict ix_arr, size_t st, size_t end, real_t_ *restrict x,
                                  double *restrict buffer_sd, bool as_relative_gain,
-                                 size_t &split_ix, double &split_point, double &xmin, double &xmax,
+                                 double *restrict buffer_imputed_x, double *restrict saved_xmedian,
+                                 size_t &split_ix, double &restrict split_point, double &restrict xmin, double &restrict xmax,
                                  GainCriterion criterion, double min_gain, MissingAction missing_action,
-                                 mapping w);
+                                 mapping &w);
 template <class real_t_, class sparse_ix>
 double eval_guided_crit(size_t ix_arr[], size_t st, size_t end,
                         size_t col_num, real_t_ Xc[], sparse_ix Xc_ind[], sparse_ix Xc_indptr[],
                         double buffer_arr[], size_t buffer_pos[], bool as_relative_gain,
+                        double *restrict saved_xmedian,
                         double &split_point, double &xmin, double &xmax,
                         GainCriterion criterion, double min_gain, MissingAction missing_action);
 template <class real_t_, class sparse_ix, class mapping>
 double eval_guided_crit_weighted(size_t ix_arr[], size_t st, size_t end,
                                  size_t col_num, real_t_ Xc[], sparse_ix Xc_ind[], sparse_ix Xc_indptr[],
                                  double buffer_arr[], size_t buffer_pos[], bool as_relative_gain,
+                                 double *restrict saved_xmedian,
                                  double &split_point, double &xmin, double &xmax,
                                  GainCriterion criterion, double min_gain, MissingAction missing_action,
-                                 mapping w);
+                                 mapping &w);
 double eval_guided_crit(size_t *restrict ix_arr, size_t st, size_t end, int *restrict x, int ncat,
+                        int *restrict saved_cat_mode,
                         size_t *restrict buffer_cnt, size_t *restrict buffer_pos, double *restrict buffer_prob,
-                        int &chosen_cat, signed char *restrict split_categ, signed char *restrict buffer_split,
+                        int &restrict chosen_cat, signed char *restrict split_categ, signed char *restrict buffer_split,
                         GainCriterion criterion, double min_gain, bool all_perm,
                         MissingAction missing_action, CategSplit cat_split_type);
 template <class mapping>
 double eval_guided_crit_weighted(size_t *restrict ix_arr, size_t st, size_t end, int *restrict x, int ncat,
+                                 int *restrict saved_cat_mode,
                                  size_t *restrict buffer_pos, double *restrict buffer_prob,
-                                 int &chosen_cat, signed char *restrict split_categ, signed char *restrict buffer_split,
+                                 int &restrict chosen_cat, signed char *restrict split_categ, signed char *restrict buffer_split,
                                  GainCriterion criterion, double min_gain, bool all_perm,
                                  MissingAction missing_action, CategSplit cat_split_type,
-                                 mapping w);
+                                 mapping &w);
 
 /* merge_models.cpp */
 ISOTREE_EXPORTED
@@ -1535,7 +1857,8 @@ std::string generate_sql_with_select_from(IsoForest *model_outputs, ExtIsoForest
                                           bool index1, int nthreads);
 void generate_tree_rules(std::vector<IsoTree> *trees, std::vector<IsoHPlane> *hplanes, bool output_score,
                          size_t curr_ix, bool index1, std::string &prev_cond, std::vector<std::string> &node_rules,
-                         std::vector<std::string> &conditions_left, std::vector<std::string> &conditions_right);
+                         std::vector<std::string> &conditions_left, std::vector<std::string> &conditions_right,
+                         const IsoForest *model_outputs, const ExtIsoForest *model_outputs_ext);
 void extract_cond_isotree(IsoForest &model, IsoTree &tree,
                           std::string &cond_left, std::string &cond_right,
                           std::vector<std::string> &numeric_colnames, std::vector<std::string> &categ_colnames,
@@ -1544,5 +1867,4 @@ void extract_cond_ext_isotree(ExtIsoForest &model, IsoHPlane &hplane,
                               std::string &cond_left, std::string &cond_right,
                               std::vector<std::string> &numeric_colnames, std::vector<std::string> &categ_colnames,
                               std::vector<std::vector<std::string>> &categ_levels);
-
 #endif /* ISOTREE_H */

@@ -1,6 +1,6 @@
-check.pos.int <- function(var, name) {
+check.pos.int <- function(var) {
     if (NROW(var) != 1L || var < 1) {
-        stop(paste0("'", name, "' must be a positive integer."))
+        stop(paste0("'", as.character(substitute(var)), "' must be a positive integer."))
     }
 }
 
@@ -15,20 +15,20 @@ check.max.depth <- function(max_depth) {
     }
 }
 
-check.str.option <- function(option, name, allowed) {
+check.str.option <- function(option, allowed) {
     if (NROW(option) != 1 || !(option %in% allowed)) {
-        stop(paste0("'", name, "' must be one of '", paste(allowed, collapse = "', '"), "'."))
+        stop(paste0("'", as.character(substitute(option)), "' must be one of '", paste(allowed, collapse = "', '"), "'."))
     }
 }
 
-check.is.prob <- function(prob, name) {
+check.is.prob <- function(prob) {
     if (NROW(prob) != 1 || prob < 0 || prob > 1) {
-        stop(paste0("'", name, "' must be a number between zero and one."))
+        stop(paste0("'", as.character(substitute(prob)), "' must be a number between zero and one."))
     }
 }
 
-check.is.bool <- function(var, name) {
-    if (NROW(var) != 1) stop(paste0("'", name, "' must be logical (boolean)."))
+check.is.bool <- function(var) {
+    if (NROW(var) != 1) stop(paste0("'", as.character(substitute(var)), "' must be logical (boolean)."))
 }
 
 check.nthreads <- function(nthreads) {
@@ -65,9 +65,17 @@ check.categ.cols <- function(categ_cols, data) {
     return(categ_cols)
 }
 
-check.is.1d <- function(var, name) {
+check.is.1d <- function(var) {
     if (NCOL(var) > 1) {
-        stop(paste0("'", name, "' must be a 1-d numeric vector."))
+        stop(paste0("'", as.character(substitute(var)), "' must be a 1-d numeric vector."))
+    }
+}
+
+coerce.null <- function(x, repl) {
+    if (is.null(x)) {
+        return(repl)
+    } else {
+        return(x)
     }
 }
 
@@ -800,8 +808,7 @@ export.metadata <- function(model) {
         ncols_per_tree = model$params$ncols_per_tree,
         prob_pick_avg_gain = model$params$prob_pick_avg_gain,
         prob_pick_pooled_gain = model$params$prob_pick_pooled_gain,
-        prob_split_avg_gain = model$params$prob_split_avg_gain,
-        prob_split_pooled_gain = model$params$prob_split_pooled_gain,
+        prob_pick_col_by_range = model$params$prob_pick_col_by_range,
         min_gain = model$params$min_gain,
         missing_action = model$params$missing_action,  ## is in c++
         new_categ_action = model$params$new_categ_action,  ## is in c++
@@ -817,6 +824,8 @@ export.metadata <- function(model) {
         sample_with_replacement = model$params$sample_with_replacement,
         penalize_range = model$params$penalize_range,
         standardize_data = model$params$standardize_data,
+        scoring_metric = model$params$scoring_metric,
+        fast_bratio = model$params$fast_bratio,
         weigh_by_kurtosis = model$params$weigh_by_kurtosis,
         assume_full_distr = model$params$assume_full_distr
     )
@@ -832,8 +841,9 @@ take.metadata <- function(metadata) {
             ncols_per_tree = metadata$params$ncols_per_tree,
             prob_pick_avg_gain = metadata$params$prob_pick_avg_gain,
             prob_pick_pooled_gain = metadata$params$prob_pick_pooled_gain,
-            prob_split_avg_gain = metadata$params$prob_split_avg_gain,
-            prob_split_pooled_gain = metadata$params$prob_split_pooled_gain,
+            prob_pick_col_by_range = metadata$params$prob_pick_col_by_range,
+            prob_pick_col_by_var = metadata$params$prob_pick_col_by_var,
+            prob_pick_col_by_kurt = metadata$params$prob_pick_col_by_kurt,
             min_gain = metadata$params$min_gain, missing_action = metadata$params$missing_action,
             new_categ_action = metadata$params$new_categ_action,
             categ_split_type = metadata$params$categ_split_type,
@@ -842,6 +852,8 @@ take.metadata <- function(metadata) {
             sample_with_replacement = metadata$params$sample_with_replacement,
             penalize_range = metadata$params$penalize_range,
             standardize_data = metadata$params$standardize_data,
+            scoring_metric = metadata$params$scoring_metric,
+            fast_bratio = metadata$params$fast_bratio,
             weigh_by_kurtosis = metadata$params$weigh_by_kurtosis,
             coefs = metadata$params$coefs, assume_full_distr = metadata$params$assume_full_distr,
             build_imputer = metadata$model_info$build_imputer, min_imp_obs = metadata$params$min_imp_obs,
@@ -866,6 +878,12 @@ take.metadata <- function(metadata) {
         )
     )
 
+    this$params$prob_pick_col_by_range  <-  coerce.null(this$params$prob_pick_col_by_range, 0.0)
+    this$params$prob_pick_col_by_var    <-  coerce.null(this$params$prob_pick_col_by_var,   0.0)
+    this$params$prob_pick_col_by_kurt   <-  coerce.null(this$params$prob_pick_col_by_kurt,  0.0)
+    this$params$scoring_metric          <-  coerce.null(this$params$scoring_metric, "depth")
+    this$params$fast_bratio             <-  coerce.null(this$params$fast_bratio, TRUE)
+
     if (!NROW(this$metadata$standardize_data))
         this$metadata$standardize_data <- TRUE
     
@@ -874,6 +892,20 @@ take.metadata <- function(metadata) {
     if (!NROW(this$metadata$categ_cols)) {
         this$metadata$categ_cols <- NULL
         this$metadata$categ_max  <- NULL
+    }
+
+    if ("prob_split_avg_gain" %in% names(metadata$params)) {
+        msg <- "'prob_split_avg_gain' has been deprecated in favor of 'prob_pick_avg_gain' + 'ntry'."
+        if (this$params$ndim == 1L) {
+            msg <- paste0(msg, " Be sure to change these parameters if adding trees to this model.")
+        }
+    }
+
+    if ("prob_split_pooled_gain" %in% names(metadata$params)) {
+        msg <- "'prob_split_pooled_gain' has been deprecated in favor of 'prob_pick_pooled_gain' + 'ntry'."
+        if (this$params$ndim == 1L) {
+            msg <- paste0(msg, " Be sure to change these parameters if adding trees to this model.")
+        }
     }
     
     class(this) <- "isolation_forest"

@@ -11,12 +11,19 @@ worldwide. This software is distributed without any warranty.
 See <http://creativecommons.org/publicdomain/zero/1.0/>. */
 #include <cstdint>
 #include <cstring>
+#if (__cplusplus  >= 202002L)
+#include <bit>
+#endif
 using std::uint32_t;
 using std::uint64_t;
 using std::memcpy;
 
 namespace Xoshiro {
 
+#if (__cplusplus  >= 202002L)
+#define rotl64(x, k) std::rotl(x, k)
+#define rotl32(x, k) std::rotl(x, k)
+#else
 [[gnu::hot]]
 static inline uint64_t rotl64(const uint64_t x, const int k) {
     return (x << k) | (x >> (64 - k));
@@ -26,6 +33,7 @@ static inline uint64_t rotl64(const uint64_t x, const int k) {
 static inline uint32_t rotl32(const uint32_t x, const int k) {
     return (x << k) | (x >> (32 - k));
 }
+#endif
 
 /* these are in order to avoid gcc warnings about 'strict aliasing rules' */
 static inline uint32_t extract_32bits_from64_left(const uint64_t x)
@@ -287,11 +295,13 @@ public:
     UniformUnitInterval(A a, B b) {}
     
     template <class XoshiroRNG>
-    [[gnu::hot]]
+    #ifndef _FOR_R
+    [[gnu::hot, gnu::optimize("no-trapping-math"), gnu::optimize("no-math-errno")]]
+    #endif
     double operator()(XoshiroRNG &rng)
     {
         #if SIZE_MAX >= UINT64_MAX
-        #   if __cplusplus >= 201402L
+        #   if (__cplusplus >= 201703L) || (__cplusplus >= 201402L && (defined(__GNUC__) || defined(_MSC_VER)))
         return (double)(gen_bits(rng) & two53_i) * 0x1.0p-53;
         #   else
         return std::ldexp(gen_bits(rng) & two53_i, -53);
@@ -304,7 +314,7 @@ public:
         memcpy(&rbits, rbits_, sizeof(uint32_t));
         rbits = rbits & two21_i;
         memcpy(rbits_, &rbits, sizeof(uint32_t));
-        #   if __cplusplus >= 201402L
+        #   if (__cplusplus >= 201703L) || (__cplusplus >= 201402L && (defined(__GNUC__) || defined(_MSC_VER)))
         return (double)bits * 0x1.0p-53;
         #   else
         return std::ldexp(bits, -53);
@@ -332,11 +342,13 @@ public:
     UniformMinusOneToOne(A a, B b) {}
 
     template <class XoshiroRNG>
-    [[gnu::hot]]
+    #ifndef _FOR_R
+    [[gnu::hot, gnu::optimize("no-trapping-math"), gnu::optimize("no-math-errno")]]
+    #endif
     double operator()(XoshiroRNG &rng)
     {
         #if SIZE_MAX >= UINT64_MAX
-        #   if __cplusplus >= 201402L
+        #   if (__cplusplus >= 201703L) || (__cplusplus >= 201402L && (defined(__GNUC__) || defined(_MSC_VER)))
         double out = (double)((int64_t)(gen_bits(rng) & two54_i) - two53_ii) * 0x1.0p-53;
         #   else
         double out = std::ldexp((int64_t)(gen_bits(rng) & two54_i) - two53_ii, -53);
@@ -351,7 +363,7 @@ public:
         memcpy(&rbits, rbits_, sizeof(uint32_t));
         rbits = rbits & two22_i;
         memcpy(rbits_, &rbits, sizeof(uint32_t));
-        #   if __cplusplus >= 201402L
+        #   if (__cplusplus >= 201703L) || (__cplusplus >= 201402L && (defined(__GNUC__) || defined(_MSC_VER)))
         double out = (double)((int64_t)bits - two53_ii) * 0x1.0p-53;
         #   else
         double out = std::ldexp((int64_t)bits - two53_ii, -53);
@@ -385,7 +397,9 @@ public:
     StandardNormalDistr(A a, B b) : has_reserve(false) {}
 
     template <class XoshiroRNG>
-    [[gnu::hot]]
+    #ifndef _FOR_R
+    [[gnu::hot, gnu::optimize("no-trapping-math"), gnu::optimize("no-math-errno")]]
+    #endif
     double operator()(XoshiroRNG &rng)
     {
         double res;
@@ -395,7 +409,7 @@ public:
         
         else {
             #if SIZE_MAX >= UINT64_MAX
-            #   if __cplusplus >= 201402L
+            #   if (__cplusplus >= 201703L) || (__cplusplus >= 201402L && (defined(__GNUC__) || defined(_MSC_VER)))
             double rnd1 = ((double)(gen_bits(rng) & two52i) + 0.5) * 0x1.0p-52;
             double rnd2 = ((double)(gen_bits(rng) & two52i) + 0.5) * 0x1.0p-52;
             #   else
@@ -419,7 +433,7 @@ public:
             memcpy(&rbits2, rbits2_, sizeof(uint32_t));
             rbits2 = rbits2 & two20_i;
             memcpy(rbits2_, &rbits2, sizeof(uint32_t));
-            #   if __cplusplus >= 201402L
+            #   if (__cplusplus >= 201703L) || (__cplusplus >= 201402L && (defined(__GNUC__) || defined(_MSC_VER)))
             rnd1 = ((double)bits1 + 0.5) * 0x1.0p-52;
             rnd2 = ((double)bits2 + 0.5) * 0x1.0p-52;
             #   else

@@ -18,11 +18,25 @@
 *     [5] https://sourceforge.net/projects/iforest/
 *     [6] https://math.stackexchange.com/questions/3388518/expected-number-of-paths-required-to-separate-elements-in-a-binary-tree
 *     [7] Quinlan, J. Ross. C4. 5: programs for machine learning. Elsevier, 2014.
-*     [8] Cortes, David. "Distance approximation using Isolation Forests." arXiv preprint arXiv:1910.12362 (2019).
-*     [9] Cortes, David. "Imputing missing values with unsupervised random trees." arXiv preprint arXiv:1911.06646 (2019).
+*     [8] Cortes, David.
+*         "Distance approximation using Isolation Forests."
+*         arXiv preprint arXiv:1910.12362 (2019).
+*     [9] Cortes, David.
+*         "Imputing missing values with unsupervised random trees."
+*         arXiv preprint arXiv:1911.06646 (2019).
+*     [10] https://math.stackexchange.com/questions/3333220/expected-average-depth-in-random-binary-tree-constructed-top-to-bottom
+*     [11] Cortes, David.
+*          "Revisiting randomized choices in isolation forests."
+*          arXiv preprint arXiv:2110.13402 (2021).
+*     [12] Guha, Sudipto, et al.
+*          "Robust random cut forest based anomaly detection on streams."
+*          International conference on machine learning. PMLR, 2016.
+*     [13] Cortes, David.
+*          "Isolation forests: looking beyond tree depth."
+*          arXiv preprint arXiv:2111.11639 (2021).
 * 
 *     BSD 2-Clause License
-*     Copyright (c) 2019-2021, David Cortes
+*     Copyright (c) 2019-2022, David Cortes
 *     All rights reserved.
 *     Redistribution and use in source and binary forms, with or without
 *     modification, are permitted provided that the following conditions are met:
@@ -44,25 +58,29 @@
 */
 #include "isotree.h"
 
+/* FIXME / TODO: here the calculations of medians do not take weights into account */
+
 #define SD_MIN 1e-10
 /* https://www.johndcook.com/blog/standard_deviation/ */
 
 /* for regular numerical */
 template <class real_t, class real_t_>
 void calc_mean_and_sd_t(size_t ix_arr[], size_t st, size_t end, real_t_ *restrict x,
-                        MissingAction missing_action, double &x_sd, double &x_mean)
+                        MissingAction missing_action, double &restrict x_sd, double &restrict x_mean)
 {
     real_t m = 0;
     real_t s = 0;
     real_t m_prev = x[ix_arr[st]];
+    real_t xval;
 
     if (missing_action == Fail)
     {
         m_prev = x[ix_arr[st]];
         for (size_t row = st; row <= end; row++)
         {
-            m += (x[ix_arr[row]] - m) / (real_t)(row - st + 1);
-            s += (x[ix_arr[row]] - m) * (x[ix_arr[row]] - m_prev);
+            xval = x[ix_arr[row]];
+            m += (xval - m) / (real_t)(row - st + 1);
+            s  = std::fma(xval - m, xval - m_prev, s);
             m_prev = m;
         }
 
@@ -80,11 +98,12 @@ void calc_mean_and_sd_t(size_t ix_arr[], size_t st, size_t end, real_t_ *restric
 
         for (size_t row = st; row <= end; row++)
         {
-            if (!is_na_or_inf(x[ix_arr[row]]))
+            xval = x[ix_arr[row]];
+            if (!is_na_or_inf(xval))
             {
                 cnt++;
-                m += (x[ix_arr[row]] - m) / (real_t)cnt;
-                s += (x[ix_arr[row]] - m) * (x[ix_arr[row]] - m_prev);
+                m += (xval - m) / (real_t)cnt;
+                s  = std::fma(xval - m, xval - m_prev, s);
                 m_prev = m;
             }
         }
@@ -99,12 +118,14 @@ double calc_mean_only(size_t ix_arr[], size_t st, size_t end, real_t_ *restrict 
 {
     size_t cnt = 0;
     double m = 0;
+    real_t_ xval;
     for (size_t row = st; row <= end; row++)
     {
-        if (!is_na_or_inf(x[ix_arr[row]]))
+        xval = x[ix_arr[row]];
+        if (!is_na_or_inf(xval))
         {
             cnt++;
-            m += (x[ix_arr[row]] - m) / (double)cnt;
+            m += (xval - m) / (double)cnt;
         }
     }
 
@@ -113,24 +134,25 @@ double calc_mean_only(size_t ix_arr[], size_t st, size_t end, real_t_ *restrict 
 
 template <class real_t_>
 void calc_mean_and_sd(size_t ix_arr[], size_t st, size_t end, real_t_ *restrict x,
-                      MissingAction missing_action, double &x_sd, double &x_mean)
+                      MissingAction missing_action, double &restrict x_sd, double &restrict x_mean)
 {
     if (end - st + 1 < THRESHOLD_LONG_DOUBLE)
         calc_mean_and_sd_t<double, real_t_>(ix_arr, st, end, x, missing_action, x_sd, x_mean);
     else
-        calc_mean_and_sd_t<long double, real_t_>(ix_arr, st, end, x, missing_action, x_sd, x_mean);
+        calc_mean_and_sd_t<ldouble_safe, real_t_>(ix_arr, st, end, x, missing_action, x_sd, x_mean);
     x_sd = std::fmax(x_sd, SD_MIN);
 }
 
 template <class real_t_, class mapping>
-void calc_mean_and_sd_weighted(size_t ix_arr[], size_t st, size_t end, real_t_ *restrict x, mapping w,
-                               MissingAction missing_action, double &x_sd, double &x_mean)
+void calc_mean_and_sd_weighted(size_t ix_arr[], size_t st, size_t end, real_t_ *restrict x, mapping &w,
+                               MissingAction missing_action, double &restrict x_sd, double &restrict x_mean)
 {
-    long double cnt = 0;
-    double w_this;
-    double m = 0;
-    long double s = 0;
-    double m_prev = x[ix_arr[st]];
+    ldouble_safe cnt = 0;
+    ldouble_safe w_this;
+    ldouble_safe m = 0;
+    ldouble_safe s = 0;
+    ldouble_safe m_prev = x[ix_arr[st]];
+    ldouble_safe xval;
     while (is_na_or_inf(m_prev) && st <= end)
     {
         m_prev = x[ix_arr[++st]];
@@ -138,22 +160,23 @@ void calc_mean_and_sd_weighted(size_t ix_arr[], size_t st, size_t end, real_t_ *
 
     for (size_t row = st; row <= end; row++)
     {
-        if (!is_na_or_inf(x[ix_arr[row]]))
+        xval = x[ix_arr[row]];
+        if (!is_na_or_inf(xval))
         {
             w_this = w[ix_arr[row]];
             cnt += w_this;
-            m += w_this * (x[ix_arr[row]] - m) / cnt;
-            s += w_this * ((x[ix_arr[row]] - m) * (x[ix_arr[row]] - m_prev));
+            m = std::fma(w_this, (xval - m) / cnt, m);
+            s = std::fma(w_this, (xval - m) * (xval - m_prev), s);
             m_prev = m;
         }
     }
 
     x_mean = m;
-    x_sd   = std::sqrt(s / (long double)cnt);
+    x_sd   = std::sqrt((long double)s / (long double)cnt);
 }
 
 template <class real_t_, class mapping>
-double calc_mean_only_weighted(size_t ix_arr[], size_t st, size_t end, real_t_ *restrict x, mapping w)
+double calc_mean_only_weighted(size_t ix_arr[], size_t st, size_t end, real_t_ *restrict x, mapping &w)
 {
     double cnt = 0;
     double w_this;
@@ -164,7 +187,7 @@ double calc_mean_only_weighted(size_t ix_arr[], size_t st, size_t end, real_t_ *
         {
             w_this = w[ix_arr[row]];
             cnt += w_this;
-            m += w_this * (x[ix_arr[row]] - m) / cnt;
+            m = std::fma(w_this, (x[ix_arr[row]] - m) / cnt, m);
         }
     }
 
@@ -173,9 +196,9 @@ double calc_mean_only_weighted(size_t ix_arr[], size_t st, size_t end, real_t_ *
 
 /* for sparse numerical */
 template <class real_t_, class sparse_ix, class real_t>
-void calc_mean_and_sd(size_t ix_arr[], size_t st, size_t end, size_t col_num,
-                      real_t_ *restrict Xc, sparse_ix Xc_ind[], sparse_ix Xc_indptr[],
-                      double &x_sd, double &x_mean)
+void calc_mean_and_sd(size_t *restrict ix_arr, size_t st, size_t end, size_t col_num,
+                      real_t_ *restrict Xc, sparse_ix *restrict Xc_ind, sparse_ix *restrict Xc_indptr,
+                      double &restrict x_sd, double &restrict x_mean)
 {
     /* ix_arr must be already sorted beforehand */
     if (Xc_indptr[col_num] == Xc_indptr[col_num + 1])
@@ -211,7 +234,7 @@ void calc_mean_and_sd(size_t ix_arr[], size_t st, size_t end, size_t col_num,
             {
                 if (added == 0) m_prev = Xc[curr_pos];
                 m += (Xc[curr_pos] - m) / (real_t)(++added);
-                s += (Xc[curr_pos] - m) * (Xc[curr_pos] - m_prev);
+                s  = std::fma(Xc[curr_pos] - m, Xc[curr_pos] - m_prev, s);
                 m_prev = m;
             }
 
@@ -252,9 +275,9 @@ void calc_mean_and_sd(size_t ix_arr[], size_t st, size_t end, size_t col_num,
 }
 
 template <class real_t_, class sparse_ix>
-void calc_mean_and_sd(size_t ix_arr[], size_t st, size_t end, size_t col_num,
-                      real_t_ *restrict Xc, sparse_ix Xc_ind[], sparse_ix Xc_indptr[],
-                      double &x_sd, double &x_mean)
+void calc_mean_and_sd(size_t *restrict ix_arr, size_t st, size_t end, size_t col_num,
+                      real_t_ *restrict Xc, sparse_ix *restrict Xc_ind, sparse_ix *restrict Xc_indptr,
+                      double &restrict x_sd, double &restrict x_mean)
 {
     if (end - st + 1 < THRESHOLD_LONG_DOUBLE)
         calc_mean_and_sd<real_t_, sparse_ix, double>(ix_arr, st, end, col_num, Xc, Xc_ind, Xc_indptr, x_sd, x_mean);
@@ -264,8 +287,8 @@ void calc_mean_and_sd(size_t ix_arr[], size_t st, size_t end, size_t col_num,
 }
 
 template <class real_t_, class sparse_ix>
-double calc_mean_only(size_t ix_arr[], size_t st, size_t end, size_t col_num,
-                      real_t_ *restrict Xc, sparse_ix Xc_ind[], sparse_ix Xc_indptr[])
+double calc_mean_only(size_t *restrict ix_arr, size_t st, size_t end, size_t col_num,
+                      real_t_ *restrict Xc, sparse_ix *restrict Xc_ind, sparse_ix *restrict Xc_indptr)
 {
     /* ix_arr must be already sorted beforehand */
     if (Xc_indptr[col_num] == Xc_indptr[col_num + 1])
@@ -314,9 +337,9 @@ double calc_mean_only(size_t ix_arr[], size_t st, size_t end, size_t col_num,
 }
 
 template <class real_t_, class sparse_ix, class mapping>
-void calc_mean_and_sd_weighted(size_t ix_arr[], size_t st, size_t end, size_t col_num,
-                               real_t_ *restrict Xc, sparse_ix Xc_ind[], sparse_ix Xc_indptr[],
-                               double &x_sd, double &x_mean, mapping w)
+void calc_mean_and_sd_weighted(size_t *restrict ix_arr, size_t st, size_t end, size_t col_num,
+                               real_t_ *restrict Xc, sparse_ix *restrict Xc_ind, sparse_ix *restrict Xc_indptr,
+                               double &restrict x_sd, double &restrict x_mean, mapping &w)
 {
     /* ix_arr must be already sorted beforehand */
     if (Xc_indptr[col_num] == Xc_indptr[col_num + 1])
@@ -331,14 +354,14 @@ void calc_mean_and_sd_weighted(size_t ix_arr[], size_t st, size_t end, size_t co
     size_t ind_end_col = (size_t) Xc_ind[end_col];
     size_t *ptr_st = std::lower_bound(ix_arr + st, ix_arr + end + 1, (size_t)Xc_ind[st_col]);
 
-    long double cnt = 0.;
+    ldouble_safe cnt = 0.;
     for (size_t row = st; row <= end; row++)
         cnt += w[ix_arr[row]];
-    long double added = 0;
-    double m = 0;
-    long double s = 0;
-    double m_prev = 0;
-    double w_this;
+    ldouble_safe added = 0;
+    ldouble_safe m = 0;
+    ldouble_safe s = 0;
+    ldouble_safe m_prev = 0;
+    ldouble_safe w_this;
 
     for (size_t *row = ptr_st;
          row != ix_arr + end + 1 && curr_pos != end_col + 1 && ind_end_col >= *row;
@@ -356,8 +379,8 @@ void calc_mean_and_sd_weighted(size_t ix_arr[], size_t st, size_t end, size_t co
                 w_this = w[*row];
                 if (added == 0) m_prev = Xc[curr_pos];
                 added += w_this;
-                m += w_this * (Xc[curr_pos] - m) / added;
-                s += w_this * ((Xc[curr_pos] - m) * (Xc[curr_pos] - m_prev));
+                m = std::fma(w_this, (Xc[curr_pos] - m) / added, m);
+                s = std::fma(w_this, (Xc[curr_pos] - m) * (Xc[curr_pos] - m_prev), s);
                 m_prev = m;
             }
 
@@ -389,18 +412,18 @@ void calc_mean_and_sd_weighted(size_t ix_arr[], size_t st, size_t end, size_t co
        The difference can be put to a closed form. */
     if (cnt > added)
     {
-        s += square(m) * (added * ((long double)1 - added/cnt));
+        s += square(m) * (added * ((long double)1 - (long double)added/(long double)cnt));
         m *= added / cnt;
     }
 
     x_mean = m;
-    x_sd   = std::sqrt(s / cnt);
+    x_sd   = std::sqrt(s / (long double)cnt);
 }
 
 template <class real_t_, class sparse_ix, class mapping>
-double calc_mean_only_weighted(size_t ix_arr[], size_t st, size_t end, size_t col_num,
-                               real_t_ *restrict Xc, sparse_ix Xc_ind[], sparse_ix Xc_indptr[],
-                               mapping w)
+double calc_mean_only_weighted(size_t *restrict ix_arr, size_t st, size_t end, size_t col_num,
+                               real_t_ *restrict Xc, sparse_ix *restrict Xc_ind, sparse_ix *restrict Xc_indptr,
+                               mapping &w)
 {
     /* ix_arr must be already sorted beforehand */
     if (Xc_indptr[col_num] == Xc_indptr[col_num + 1])
@@ -411,12 +434,12 @@ double calc_mean_only_weighted(size_t ix_arr[], size_t st, size_t end, size_t co
     size_t ind_end_col = (size_t) Xc_ind[end_col];
     size_t *ptr_st = std::lower_bound(ix_arr + st, ix_arr + end + 1, (size_t)Xc_ind[st_col]);
 
-    long double cnt = 0.;
+    ldouble_safe cnt = 0.;
     for (size_t row = st; row <= end; row++)
         cnt += w[ix_arr[row]];
-    long double added = 0;
-    double m = 0;
-    double w_this;
+    ldouble_safe added = 0;
+    ldouble_safe m = 0;
+    ldouble_safe w_this;
 
     for (size_t *row = ptr_st;
          row != ix_arr + end + 1 && curr_pos != end_col + 1 && ind_end_col >= *row;
@@ -451,7 +474,7 @@ double calc_mean_only_weighted(size_t ix_arr[], size_t st, size_t end, size_t co
         return 0;
 
     if (cnt > added)
-        m *= added / cnt;
+        m *= (long double)added / (long double)cnt;
 
     return m;
 }
@@ -463,7 +486,7 @@ double calc_mean_only_weighted(size_t ix_arr[], size_t st, size_t end, size_t co
 /* for regular numerical */
 template <class real_t_>
 void add_linear_comb(size_t ix_arr[], size_t st, size_t end, double *restrict res,
-                     real_t_ *restrict x, double &coef, double x_sd, double x_mean, double &fill_val,
+                     real_t_ *restrict x, double &coef, double x_sd, double x_mean, double &restrict fill_val,
                      MissingAction missing_action, double *restrict buffer_arr,
                      size_t *restrict buffer_NAs, bool first_run)
 {
@@ -532,9 +555,9 @@ void add_linear_comb(size_t ix_arr[], size_t st, size_t end, double *restrict re
 /* for regular numerical */
 template <class real_t_, class mapping>
 void add_linear_comb_weighted(size_t ix_arr[], size_t st, size_t end, double *restrict res,
-                              real_t_ *restrict x, double &coef, double x_sd, double x_mean, double &fill_val,
+                              real_t_ *restrict x, double &coef, double x_sd, double x_mean, double &restrict fill_val,
                               MissingAction missing_action, double *restrict buffer_arr,
-                              size_t *restrict buffer_NAs, bool first_run, mapping w)
+                              size_t *restrict buffer_NAs, bool first_run, mapping &w)
 {
     /* TODO: here don't need the buffer for NAs */
 
@@ -544,7 +567,7 @@ void add_linear_comb_weighted(size_t ix_arr[], size_t st, size_t end, double *re
     size_t cnt = 0;
     size_t cnt_NA = 0;
     double *restrict res_write = res - st;
-    long double cumw = 0;
+    ldouble_safe cumw = 0;
     double w_this;
     /* TODO: these buffers should be allocated externally */
     std::vector<double> obs_weight;
@@ -593,12 +616,12 @@ void add_linear_comb_weighted(size_t ix_arr[], size_t st, size_t end, double *re
         }
 
 
-        long double mid_point = cumw / 2.;
+        long double mid_point = cumw / 2.0l;
         std::vector<size_t> sorted_ix(cnt);
         std::iota(sorted_ix.begin(), sorted_ix.end(), (size_t)0);
         std::sort(sorted_ix.begin(), sorted_ix.end(),
                   [&buffer_arr](const size_t a, const size_t b){return buffer_arr[a] < buffer_arr[b];});
-        long double currw = 0;
+        ldouble_safe currw = 0;
         fill_val = buffer_arr[sorted_ix.back()]; /* <- will overwrite later */
         /* TODO: is this median calculation correct? should it do a weighted interpolation? */
         for (size_t ix = 0; ix < cnt; ix++)
@@ -628,7 +651,7 @@ void add_linear_comb_weighted(size_t ix_arr[], size_t st, size_t end, double *re
 template <class real_t_, class sparse_ix>
 void add_linear_comb(size_t *restrict ix_arr, size_t st, size_t end, size_t col_num, double *restrict res,
                      real_t_ *restrict Xc, sparse_ix *restrict Xc_ind, sparse_ix *restrict Xc_indptr,
-                     double &coef, double x_sd, double x_mean, double &fill_val, MissingAction missing_action,
+                     double &restrict coef, double x_sd, double x_mean, double &restrict fill_val, MissingAction missing_action,
                      double *restrict buffer_arr, size_t *restrict buffer_NAs, bool first_run)
 {
     /* ix_arr must be already sorted beforehand */
@@ -846,8 +869,8 @@ void add_linear_comb(size_t *restrict ix_arr, size_t st, size_t end, size_t col_
 template <class real_t_, class sparse_ix, class mapping>
 void add_linear_comb_weighted(size_t *restrict ix_arr, size_t st, size_t end, size_t col_num, double *restrict res,
                               real_t_ *restrict Xc, sparse_ix *restrict Xc_ind, sparse_ix *restrict Xc_indptr,
-                              double &coef, double x_sd, double x_mean, double &fill_val, MissingAction missing_action,
-                              double *restrict buffer_arr, size_t *restrict buffer_NAs, bool first_run, mapping w)
+                              double &restrict coef, double x_sd, double x_mean, double &restrict fill_val, MissingAction missing_action,
+                              double *restrict buffer_arr, size_t *restrict buffer_NAs, bool first_run, mapping &w)
 {
     /* TODO: there's likely a better way of doing this directly with sparse inputs.
        Think about some way of doing it efficiently. */
@@ -871,13 +894,13 @@ void add_linear_comb_weighted(size_t *restrict ix_arr, size_t st, size_t end, si
             }
         }
 
-        long double cumw = std::accumulate(obs_weight.begin(), obs_weight.begin() + end_new, (long double)0);
-        long double mid_point = cumw / 2.0l;
+        ldouble_safe cumw = std::accumulate(obs_weight.begin(), obs_weight.begin() + end_new, (ldouble_safe)0);
+        ldouble_safe mid_point = cumw / 2.0l;
         std::vector<size_t> sorted_ix(end_new);
         std::iota(sorted_ix.begin(), sorted_ix.end(), (size_t)0);
         std::sort(sorted_ix.begin(), sorted_ix.end(),
                   [&denseX](const size_t a, const size_t b){return denseX[a] < denseX[b];});
-        long double currw = 0;
+        ldouble_safe currw = 0;
         fill_val = denseX[sorted_ix.back()]; /* <- will overwrite later */
         /* TODO: is this median calculation correct? should it do a weighted interpolation? */
         for (size_t ix = 0; ix < end_new; ix++)
@@ -916,7 +939,7 @@ void add_linear_comb_weighted(size_t *restrict ix_arr, size_t st, size_t end, si
 /* for categoricals */
 void add_linear_comb(size_t *restrict ix_arr, size_t st, size_t end, double *restrict res,
                      int x[], int ncat, double *restrict cat_coef, double single_cat_coef, int chosen_cat,
-                     double &fill_val, double &fill_new, size_t *restrict buffer_cnt, size_t *restrict buffer_pos,
+                     double &restrict fill_val, double &restrict fill_new, size_t *restrict buffer_cnt, size_t *restrict buffer_pos,
                      NewCategAction new_cat_action, MissingAction missing_action, CategSplit cat_split_type, bool first_run)
 {
     double *restrict res_write = res - st;
@@ -1101,9 +1124,9 @@ void add_linear_comb(size_t *restrict ix_arr, size_t st, size_t end, double *res
 template <class mapping>
 void add_linear_comb_weighted(size_t *restrict ix_arr, size_t st, size_t end, double *restrict res,
                               int x[], int ncat, double *restrict cat_coef, double single_cat_coef, int chosen_cat,
-                              double &fill_val, double &fill_new, size_t *restrict buffer_pos,
+                              double &restrict fill_val, double &restrict fill_new, size_t *restrict buffer_pos,
                               NewCategAction new_cat_action, MissingAction missing_action, CategSplit cat_split_type,
-                              bool first_run, mapping w)
+                              bool first_run, mapping &w)
 {
     double *restrict res_write = res - st;
     /* TODO: this buffer should be allocated externally */
@@ -1205,7 +1228,7 @@ void add_linear_comb_weighted(size_t *restrict ix_arr, size_t st, size_t end, do
             }
 
             /* TODO: this buffer should be allocated externally */
-            std::vector<long double> buffer_cnt(ncat+1, 0.);
+            std::vector<ldouble_safe> buffer_cnt(ncat+1, 0.);
             switch(missing_action)
             {
                 case Fail:
@@ -1242,7 +1265,7 @@ void add_linear_comb_weighted(size_t *restrict ix_arr, size_t st, size_t end, do
             {
                 case Smallest:
                 {
-                    long double smallest = HUGE_VALL;
+                    ldouble_safe smallest = std::numeric_limits<ldouble_safe>::infinity();
                     int cat_smallest = 0;
                     for (int cat = 0; cat < ncat; cat++)
                     {
@@ -1259,7 +1282,7 @@ void add_linear_comb_weighted(size_t *restrict ix_arr, size_t st, size_t end, do
                 default:
                 {
                     /* Determine imputation value as the category in sorted order that gives 50% + 1 */
-                    long double cnt_l = std::accumulate(buffer_cnt.begin(), buffer_cnt.begin() + ncat, (long double)0.);
+                    ldouble_safe cnt_l = std::accumulate(buffer_cnt.begin(), buffer_cnt.begin() + ncat, (ldouble_safe)0);
                     std::iota(buffer_pos, buffer_pos + ncat, (size_t)0);
                     std::sort(buffer_pos, buffer_pos + ncat, [&cat_coef](const size_t a, const size_t b){return cat_coef[a] < cat_coef[b];});
 
@@ -1267,7 +1290,7 @@ void add_linear_comb_weighted(size_t *restrict ix_arr, size_t st, size_t end, do
                     int cat;
                     for (cat = 0; cat < ncat; cat++)
                     {
-                        cumprob += (long double)buffer_cnt[buffer_pos[cat]] / cnt_l;
+                        cumprob += buffer_cnt[buffer_pos[cat]] / cnt_l;
                         if (cumprob >= .5) break;
                     }
                     // cat = std::min(cat, ncat); /* in case it picks the last one */

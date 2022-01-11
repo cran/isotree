@@ -18,11 +18,25 @@
 *     [5] https://sourceforge.net/projects/iforest/
 *     [6] https://math.stackexchange.com/questions/3388518/expected-number-of-paths-required-to-separate-elements-in-a-binary-tree
 *     [7] Quinlan, J. Ross. C4. 5: programs for machine learning. Elsevier, 2014.
-*     [8] Cortes, David. "Distance approximation using Isolation Forests." arXiv preprint arXiv:1910.12362 (2019).
-*     [9] Cortes, David. "Imputing missing values with unsupervised random trees." arXiv preprint arXiv:1911.06646 (2019).
+*     [8] Cortes, David.
+*         "Distance approximation using Isolation Forests."
+*         arXiv preprint arXiv:1910.12362 (2019).
+*     [9] Cortes, David.
+*         "Imputing missing values with unsupervised random trees."
+*         arXiv preprint arXiv:1911.06646 (2019).
+*     [10] https://math.stackexchange.com/questions/3333220/expected-average-depth-in-random-binary-tree-constructed-top-to-bottom
+*     [11] Cortes, David.
+*          "Revisiting randomized choices in isolation forests."
+*          arXiv preprint arXiv:2110.13402 (2021).
+*     [12] Guha, Sudipto, et al.
+*          "Robust random cut forest based anomaly detection on streams."
+*          International conference on machine learning. PMLR, 2016.
+*     [13] Cortes, David.
+*          "Isolation forests: looking beyond tree depth."
+*          arXiv preprint arXiv:2111.11639 (2021).
 * 
 *     BSD 2-Clause License
-*     Copyright (c) 2019-2021, David Cortes
+*     Copyright (c) 2019-2022, David Cortes
 *     All rights reserved.
 *     Redistribution and use in source and binary forms, with or without
 *     modification, are permitted provided that the following conditions are met:
@@ -147,8 +161,7 @@
 * - output_depths[nrows] (out)
 *       Pointer to array where the output average depths or outlier scores will be written into
 *       (the return type is controlled according to parameter 'standardize').
-*       Must already be initialized to zeros, and should always be passed when calling
-*       this function (it is not optional).
+*       Should always be passed when calling this function (it is not optional).
 * - tree_num[nrows * ntrees] (out)
 *       Pointer to array where the output terminal node numbers will be written into.
 *       Note that the mapping between tree node and terminal tree node is not stored in
@@ -167,14 +180,14 @@
 *       Pass NULL if this type of output is not needed.
 */
 template <class real_t, class sparse_ix>
-void predict_iforest(real_t numeric_data[], int categ_data[],
+void predict_iforest(real_t *restrict numeric_data, int *restrict categ_data,
                      bool is_col_major, size_t ld_numeric, size_t ld_categ,
-                     real_t Xc[], sparse_ix Xc_ind[], sparse_ix Xc_indptr[],
-                     real_t Xr[], sparse_ix Xr_ind[], sparse_ix Xr_indptr[],
+                     real_t *restrict Xc, sparse_ix *restrict Xc_ind, sparse_ix *restrict Xc_indptr,
+                     real_t *restrict Xr, sparse_ix *restrict Xr_ind, sparse_ix *restrict Xr_indptr,
                      size_t nrows, int nthreads, bool standardize,
                      IsoForest *model_outputs, ExtIsoForest *model_outputs_ext,
-                     double output_depths[],   sparse_ix tree_num[],
-                     double per_tree_depths[])
+                     double *restrict output_depths,   sparse_ix *restrict tree_num,
+                     double *restrict per_tree_depths)
 {
     /* put data in a struct for passing it in fewer lines */
     PredictionData<real_t, sparse_ix>
@@ -210,17 +223,19 @@ void predict_iforest(real_t numeric_data[], int categ_data[],
                     shared(nrows, model_outputs, prediction_data, output_depths, tree_num, per_tree_depths)
             for (size_t_for row = 0; row < (decltype(row))nrows; row++)
             {
+                double score = 0;
                 for (size_t tree = 0; tree < model_outputs->trees.size(); tree++)
                 {
                     traverse_itree_no_recurse(model_outputs->trees[tree],
                                               *model_outputs,
                                               prediction_data,
-                                              output_depths[row],
+                                              score,
                                               (tree_num == NULL)? NULL : (tree_num + nrows * tree),
                                               (per_tree_depths == NULL)?
                                                   NULL : (per_tree_depths + tree + row*model_outputs->trees.size()),
                                               (size_t) row);
                 }
+                output_depths[row] = score;
             }
         }
 
@@ -230,20 +245,22 @@ void predict_iforest(real_t numeric_data[], int categ_data[],
                     shared(nrows, model_outputs, prediction_data, output_depths, tree_num, per_tree_depths)
             for (size_t_for row = 0; row < (decltype(row))nrows; row++)
             {
+                double score = 0;
                 for (size_t tree = 0; tree < model_outputs->trees.size(); tree++)
                 {
-                    output_depths[row] += traverse_itree(model_outputs->trees[tree],
-                                                         *model_outputs,
-                                                         prediction_data,
-                                                         (std::vector<ImputeNode>*)NULL,
-                                                         (ImputedData<sparse_ix>*)NULL,
-                                                         (double)0,
-                                                         (size_t) row,
-                                                         (tree_num == NULL)? NULL : (tree_num + nrows * tree),
-                                                         (per_tree_depths == NULL)?
-                                                            NULL : (per_tree_depths + tree + row*model_outputs->trees.size()),
-                                                         (size_t) 0);
+                    score += traverse_itree(model_outputs->trees[tree],
+                                            *model_outputs,
+                                            prediction_data,
+                                            (std::vector<ImputeNode>*)NULL,
+                                            (ImputedData<sparse_ix>*)NULL,
+                                            (double)0,
+                                            (size_t) row,
+                                            (tree_num == NULL)? NULL : (tree_num + nrows * tree),
+                                            (per_tree_depths == NULL)?
+                                                NULL : (per_tree_depths + tree + row*model_outputs->trees.size()),
+                                            (size_t) 0);
                 }
+                output_depths[row] = score;
             }
         }
     }
@@ -263,17 +280,19 @@ void predict_iforest(real_t numeric_data[], int categ_data[],
                     shared(nrows, model_outputs_ext, prediction_data, output_depths, tree_num, per_tree_depths)
             for (size_t_for row = 0; row < (decltype(row))nrows; row++)
             {
+                double score = 0;
                 for (size_t tree = 0; tree < model_outputs_ext->hplanes.size(); tree++)
                 {
                     traverse_hplane_fast(model_outputs_ext->hplanes[tree],
                                          *model_outputs_ext,
                                          prediction_data,
-                                         output_depths[row],
+                                         score,
                                          (tree_num == NULL)? NULL : (tree_num + nrows * tree),
                                          (per_tree_depths == NULL)?
                                             NULL : (per_tree_depths + tree + row*model_outputs_ext->hplanes.size()),
                                          (size_t) row);
                 }
+                output_depths[row] = score;
             }
         }
 
@@ -283,12 +302,13 @@ void predict_iforest(real_t numeric_data[], int categ_data[],
                     shared(nrows, model_outputs_ext, prediction_data, output_depths, tree_num, per_tree_depths)
             for (size_t_for row = 0; row < (decltype(row))nrows; row++)
             {
+                double score = 0;
                 for (size_t tree = 0; tree < model_outputs_ext->hplanes.size(); tree++)
                 {
                     traverse_hplane(model_outputs_ext->hplanes[tree],
                                     *model_outputs_ext,
                                     prediction_data,
-                                    output_depths[row],
+                                    score,
                                     (std::vector<ImputeNode>*)NULL,
                                     (ImputedData<sparse_ix>*)NULL,
                                     (tree_num == NULL)? NULL : (tree_num + nrows * tree),
@@ -296,6 +316,7 @@ void predict_iforest(real_t numeric_data[], int categ_data[],
                                         NULL : (per_tree_depths + tree + row*model_outputs_ext->hplanes.size()),
                                     (size_t) row);
                 }
+                output_depths[row] = score;
             }
         }
     }
@@ -314,14 +335,85 @@ void predict_iforest(real_t numeric_data[], int categ_data[],
         depth_divisor = ntrees * (model_outputs_ext->exp_avg_depth);
     }
 
+    
+    /* for density and boxed_ratio, each tree will have 'log(d)'' instead of 'd' */
+    bool is_density = (model_outputs != NULL && model_outputs->scoring_metric == Density) ||
+                      (model_outputs_ext != NULL && model_outputs_ext->scoring_metric == Density);
+    bool is_bratio  = (model_outputs != NULL && model_outputs->scoring_metric == BoxedRatio) ||
+                      (model_outputs_ext != NULL && model_outputs_ext->scoring_metric == BoxedRatio);
+    bool is_bdens   = (model_outputs != NULL && model_outputs->scoring_metric == BoxedDensity) ||
+                      (model_outputs_ext != NULL && model_outputs_ext->scoring_metric == BoxedDensity);
+    bool is_bdens2  = (model_outputs != NULL && model_outputs->scoring_metric == BoxedDensity2) ||
+                      (model_outputs_ext != NULL && model_outputs_ext->scoring_metric == BoxedDensity2);
+
     if (standardize)
-        #pragma omp parallel for if(nrows > 100) schedule(static) num_threads(nthreads) \
-                shared(nrows, output_depths, depth_divisor)
-        for (size_t_for row = 0; row < (decltype(row))nrows; row++)
-            output_depths[row] = std::exp2( - output_depths[row] / depth_divisor );
+    {
+        if (is_density || is_bdens2)
+        {
+            ntrees = -ntrees;
+            for (size_t row = 0; row < nrows; row++)
+                output_depths[row] /= ntrees;
+        }
+
+        else if (is_bdens)
+        {
+            #ifndef _WIN32
+            #pragma omp simd
+            #endif
+            for (size_t row = 0; row < nrows; row++)
+                output_depths[row] = -std::exp(output_depths[row] / ntrees);
+        }
+
+        else if (is_bratio)
+        {
+            for (size_t row = 0; row < nrows; row++)
+                output_depths[row] = output_depths[row] / ntrees;
+        }
+
+        else
+        {
+            #ifndef _WIN32
+            #pragma omp simd
+            #endif
+            for (size_t row = 0; row < nrows; row++)
+                output_depths[row] = std::exp2( - output_depths[row] / depth_divisor );
+        }
+    }
+
     else
-        for (size_t row = 0; row < nrows; row++)
-            output_depths[row] /= ntrees;
+    {
+        if (is_density || is_bdens || is_bdens2)
+        {
+            #ifndef _WIN32
+            #pragma omp simd
+            #endif
+            for (size_t row = 0; row < nrows; row++)
+                output_depths[row] = std::exp(output_depths[row] / ntrees);
+        }
+
+        else if (is_bratio)
+        {
+            ntrees = -ntrees;
+            for (size_t row = 0; row < nrows; row++)
+                output_depths[row] /= ntrees;
+        }
+
+        else
+        {
+            for (size_t row = 0; row < nrows; row++)
+                output_depths[row] /= ntrees;
+        }
+    }
+
+    if (per_tree_depths != NULL && (is_density || is_bdens || is_bdens2))
+    {
+        size_t ntrees = (model_outputs != NULL)? model_outputs->trees.size() : model_outputs_ext->hplanes.size();
+        #ifndef _WIN32
+        #pragma omp simd
+        #endif
+        for (size_t ix = 0; ix < nrows*ntrees; ix++)
+            per_tree_depths[ix] = std::exp(per_tree_depths[ix]);
+    }
 
 
     /* re-map tree numbers to start at zero (if predicting tree numbers) */
@@ -334,11 +426,10 @@ void predict_iforest(real_t numeric_data[], int categ_data[],
 }
 
 template <class PredictionData, class sparse_ix>
-[[gnu::hot]]
 void traverse_itree_no_recurse(std::vector<IsoTree>  &tree,
                                IsoForest             &model_outputs,
                                PredictionData        &prediction_data,
-                               double                &output_depth,
+                               double &restrict      output_depth,
                                sparse_ix *restrict   tree_num,
                                double *restrict      tree_depth,
                                size_t                row)
@@ -348,7 +439,8 @@ void traverse_itree_no_recurse(std::vector<IsoTree>  &tree,
     int    cval;
     while (true)
     {
-        if (tree[curr_lev].score > 0)
+        // if (tree[curr_lev].score > 0)
+        if (tree[curr_lev].tree_left == 0)
         {
             output_depth += tree[curr_lev].score;
             if (tree_num != NULL)
@@ -464,7 +556,6 @@ void traverse_itree_no_recurse(std::vector<IsoTree>  &tree,
 enum NumericConfig {DenseRowMajor, DenseColMajor, SparseCSR, SparseCSC};
 
 template <class PredictionData, class sparse_ix, class ImputedData>
-[[gnu::hot]]
 double traverse_itree(std::vector<IsoTree>     &tree,
                       IsoForest                &model_outputs,
                       PredictionData           &prediction_data,
@@ -499,7 +590,8 @@ double traverse_itree(std::vector<IsoTree>     &tree,
 
     while (true)
     {
-        if (tree[curr_lev].score >= 0.)
+        // if (tree[curr_lev].score >= 0.)
+        if (tree[curr_lev].tree_left == 0)
         {
             if (tree_num != NULL)
                 tree_num[row] = curr_lev;
@@ -639,7 +731,7 @@ double traverse_itree(std::vector<IsoTree>     &tree,
                             case SubSet:
                             {
 
-                                if (!tree[curr_lev].cat_split.size())
+                                if (tree[curr_lev].cat_split.empty())
                                 {
                                     if (cval <= 1)
                                     {
@@ -755,11 +847,10 @@ double traverse_itree(std::vector<IsoTree>     &tree,
 /* this is a simpler version for situations in which there is
    only numeric data in dense arrays, no missing values, no range penalty */
 template <class PredictionData, class sparse_ix>
-[[gnu::hot]]
 void traverse_hplane_fast(std::vector<IsoHPlane>  &hplane,
                           ExtIsoForest            &model_outputs,
                           PredictionData          &prediction_data,
-                          double                  &output_depth,
+                          double &restrict        output_depth,
                           sparse_ix *restrict     tree_num,
                           double *restrict        tree_depth,
                           size_t                  row)
@@ -769,7 +860,8 @@ void traverse_hplane_fast(std::vector<IsoHPlane>  &hplane,
 
     while(true)
     {
-        if (hplane[curr_lev].score > 0)
+        // if (hplane[curr_lev].score > 0)
+        if (hplane[curr_lev].hplane_left == 0)
         {
             output_depth += hplane[curr_lev].score;
             if (tree_num != NULL)
@@ -804,11 +896,10 @@ void traverse_hplane_fast(std::vector<IsoHPlane>  &hplane,
 
 /* this is the full version that works with potentially missing values, sparse matrices, and categoricals */
 template <class PredictionData, class sparse_ix, class ImputedData>
-[[gnu::hot]]
 void traverse_hplane(std::vector<IsoHPlane>   &hplane,
                      ExtIsoForest             &model_outputs,
                      PredictionData           &prediction_data,
-                     double                   &output_depth,
+                     double &restrict         output_depth,
                      std::vector<ImputeNode> *impute_nodes,     /* only when imputing missing */
                      ImputedData             *imputed_data,     /* only when imputing missing */
                      sparse_ix *restrict      tree_num,
@@ -841,7 +932,8 @@ void traverse_hplane(std::vector<IsoHPlane>   &hplane,
 
     while(true)
     {
-        if (hplane[curr_lev].score > 0)
+        // if (hplane[curr_lev].score > 0)
+        if (hplane[curr_lev].hplane_left == 0)
         {
             output_depth += hplane[curr_lev].score;
             if (tree_num != NULL)
@@ -995,8 +1087,8 @@ void traverse_hplane(std::vector<IsoHPlane>   &hplane,
 template <class real_t, class sparse_ix>
 void batched_csc_predict(PredictionData<real_t, sparse_ix> &prediction_data, int nthreads,
                          IsoForest *model_outputs, ExtIsoForest *model_outputs_ext,
-                         double output_depths[],   sparse_ix tree_num[],
-                         double per_tree_depths[])
+                         double *restrict output_depths,   sparse_ix *restrict tree_num,
+                         double *restrict per_tree_depths)
 {
     #ifdef _OPENMP
     size_t ntrees = (model_outputs != NULL)? model_outputs->trees.size() : model_outputs_ext->hplanes.size();
@@ -1145,8 +1237,8 @@ void traverse_itree_csc(WorkerForPredictCSC   &workspace,
                         std::vector<IsoTree>  &trees,
                         IsoForest             &model_outputs,
                         PredictionData        &prediction_data,
-                        sparse_ix             *tree_num,
-                        double                *per_tree_depths,
+                        sparse_ix *restrict   tree_num,
+                        double *restrict      per_tree_depths,
                         size_t                curr_tree,
                         bool                  has_range_penalty)
 {
@@ -1389,8 +1481,8 @@ void traverse_hplane_csc(WorkerForPredictCSC      &workspace,
                          std::vector<IsoHPlane>   &hplanes,
                          ExtIsoForest             &model_outputs,
                          PredictionData           &prediction_data,
-                         sparse_ix                *tree_num,
-                         double                   *per_tree_depths,
+                         sparse_ix *restrict      tree_num,
+                         double *restrict         per_tree_depths,
                          size_t                   curr_tree,
                          bool                     has_range_penalty)
 {
@@ -1511,7 +1603,7 @@ void traverse_hplane_csc(WorkerForPredictCSC      &workspace,
 template <class PredictionData>
 void add_csc_range_penalty(WorkerForPredictCSC  &workspace,
                            PredictionData       &prediction_data,
-                           double               *weights_arr,
+                           double *restrict     weights_arr,
                            size_t               col_num,
                            double               range_low,
                            double               range_high)
