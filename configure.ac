@@ -1,4 +1,4 @@
-AC_INIT([isotree], 0.5.5)
+AC_INIT([isotree], 0.5.14)
 AC_LANG(C++)
 AC_COMPILE_IFELSE(
     [AC_LANG_PROGRAM([[]], [[double *__restrict x;]])],
@@ -27,6 +27,39 @@ AC_COMPILE_IFELSE(
 )
 CXXFLAGS="$OLD_CXXFLAGS"
 AC_SUBST(FNTP_FLAG)
+
+OLD_CXXFLAGS="$CXXFLAGS"
+CXXFLAGS="$CXXFLAGS -std=c++17"
+AC_COMPILE_IFELSE(
+    [AC_LANG_PROGRAM([[]])],
+    [CXX_SUPPORTED="CXX17"],
+    [CXX_SUPPORTED="CXX11"]
+)
+CXXFLAGS="$OLD_CXXFLAGS"
+
+if test "$CXX_SUPPORTED" = "CXX11"; then
+    OLD_CXXFLAGS="$CXXFLAGS"
+    CXXFLAGS="$CXXFLAGS -std=gnu++14"
+    AC_COMPILE_IFELSE(
+        [AC_LANG_PROGRAM([[]])],
+        [CXX_SUPPORTED="CXX14"],
+        [CXX_SUPPORTED="CXX11"]
+    )
+    CXXFLAGS="$OLD_CXXFLAGS"
+fi
+
+AC_SUBST(CXX_SUPPORTED)
+
+LD_SUPPORT=""
+if test -n "${NO_LONG_DOUBLE}"; then
+    LD_SUPPORT="-DNO_LONG_DOUBLE"
+fi
+if test "$LD_SUPPORT" = ""; then
+    if test `${R_HOME}/bin${R_ARCH_BIN}/Rscript -e "cat(unname(as.integer(capabilities('long.double'))))"` = "0"; then
+        LD_SUPPORT="-DNO_LONG_DOUBLE"
+    fi
+fi
+AC_SUBST(LD_SUPPORT)
 
 AC_CONFIG_FILES([src/Makevars])
 AC_OUTPUT

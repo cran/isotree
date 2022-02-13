@@ -34,6 +34,10 @@
 *     [13] Cortes, David.
 *          "Isolation forests: looking beyond tree depth."
 *          arXiv preprint arXiv:2111.11639 (2021).
+*     [14] Ting, Kai Ming, Yue Zhu, and Zhi-Hua Zhou.
+*          "Isolation kernel and its effect on SVM"
+*          Proceedings of the 24th ACM SIGKDD
+*          International Conference on Knowledge Discovery & Data Mining. 2018.
 * 
 *     BSD 2-Clause License
 *     Copyright (c) 2019-2022, David Cortes
@@ -67,4 +71,12 @@
 #include "isoforest.h"
 #include "mult.h"
 #include "predict.h"
+#include "ref_indexer.h"
 #include "utils.h"
+
+/*  Note: Cython also defines these in its auto-generated code, and leads to
+    conflicts if they are not undefined and then included again.  */
+#ifdef _FOR_PYTHON
+    #undef likely
+    #undef unlikely
+#endif

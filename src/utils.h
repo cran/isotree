@@ -34,6 +34,10 @@
 *     [13] Cortes, David.
 *          "Isolation forests: looking beyond tree depth."
 *          arXiv preprint arXiv:2111.11639 (2021).
+*     [14] Ting, Kai Ming, Yue Zhu, and Zhi-Hua Zhou.
+*          "Isolation kernel and its effect on SVM"
+*          Proceedings of the 24th ACM SIGKDD
+*          International Conference on Knowledge Discovery & Data Mining. 2018.
 * 
 *     BSD 2-Clause License
 *     Copyright (c) 2019-2022, David Cortes
@@ -124,19 +128,18 @@
     #endif
 #endif
 
-#define THRESHOLD_EXACT_H 256 /* above this will get approximated */
-
 /* adapted from cephes */
 #define EULERS_GAMMA 0.577215664901532860606512
 double digamma(double x)
 {
     double y, z, z2;
 
-    /* check for positive integer up to 10 */
-    if( (x <= THRESHOLD_EXACT_H) && (x == std::floor(x)) )
-        return harmonic(x - 1) - EULERS_GAMMA;
+    /* check for positive integer up to 128 */
+    if (unlikely((x <= 64) && (x == std::floor(x)))) {
+        return harmonic_recursive(1.0, (double)x) - EULERS_GAMMA;
+    }
 
-    if( x < 1.0e17 )
+    if (likely(x < 1.0e17 ))
     {
         z = 1.0/(x * x);
         z2 = square(z);
@@ -159,22 +162,16 @@ double digamma(double x)
 /* http://fredrik-j.blogspot.com/2009/02/how-not-to-compute-harmonic-numbers.html
    https://en.wikipedia.org/wiki/Harmonic_number
    https://github.com/scikit-learn/scikit-learn/pull/19087 */
+template <class ldouble_safe>
 double harmonic(size_t n)
 {
-    if (n > THRESHOLD_EXACT_H)
-    {
-        long double temp = 1.0l / square((long double)n);
-        return  - 0.5l * temp * ( 1.0l/6.0l  -   temp * (1.0l/60.0l - (1.0l/126.0l)*temp) )
-                + 0.5l * (1.0l/(long double)n)
-                + std::log((long double)n) + (long double)EULERS_GAMMA;
-    }
-    
-    else
-    {
-        return harmonic_recursive((double)1, (double)(n + 1));
-    }
+    ldouble_safe temp = (ldouble_safe)1 / square((ldouble_safe)n);
+    return  - (ldouble_safe)0.5 * temp * ( (ldouble_safe)1/(ldouble_safe)6  -   temp * ((ldouble_safe)1/(ldouble_safe)60 - ((ldouble_safe)1/(ldouble_safe)126)*temp) )
+            + (ldouble_safe)0.5 * ((ldouble_safe)1/(ldouble_safe)n)
+            + std::log((ldouble_safe)n) + (ldouble_safe)EULERS_GAMMA;
 }
 
+/* usage for getting harmonic(n) is like this: harmonic_recursive((double)1, (double)(n + 1)); */
 double harmonic_recursive(double a, double b)
 {
     if (b == a + 1) return 1. / a;
@@ -184,38 +181,29 @@ double harmonic_recursive(double a, double b)
 
 /* https://stats.stackexchange.com/questions/423542/isolation-forest-and-average-expected-depth-formula
    https://math.stackexchange.com/questions/3333220/expected-average-depth-in-random-binary-tree-constructed-top-to-bottom */
+#include "exp_depth_table.h"
+template <class ldouble_safe>
 double expected_avg_depth(size_t sample_size)
 {
-    switch(sample_size)
-    {
-        case 1: return 0.;
-        case 2: return 1.;
-        case 3: return 5.0/3.0;
-        case 4: return 13.0/6.0;
-        case 5: return 77.0/30.0;
-        case 6: return 29.0/10.0;
-        case 7: return 223.0/70.0;
-        case 8: return 481.0/140.0;
-        case 9: return 4609.0/1260.0;
-        default:
-        {
-            return 2. * (harmonic(sample_size) - 1.);
-        }
+    if (likely(sample_size <= N_PRECALC_EXP_DEPTH)) {
+        return exp_depth_table[sample_size - 1];
     }
+    return 2. * (harmonic<ldouble_safe>(sample_size) - 1.);
 }
 
 /* Note: H(x) = psi(x+1) + gamma */
-double expected_avg_depth(long double approx_sample_size)
+template <class ldouble_safe>
+double expected_avg_depth(ldouble_safe approx_sample_size)
 {
     if (approx_sample_size <= 1)
         return 0;
-    else if (approx_sample_size < (long double)INT32_MAX)
+    else if (approx_sample_size < (ldouble_safe)INT32_MAX)
         return 2. * (digamma(approx_sample_size + 1.) + EULERS_GAMMA - 1.);
     else {
-        long double temp = 1.0l / square(approx_sample_size);
-        return 2.0l * std::log(approx_sample_size) + 2.0l*((long double)EULERS_GAMMA - 1.0l)
-               + (1.0l/approx_sample_size)
-               - temp * ( 1.0l/6.0l -   temp * (1.0l/60.0l - (1.0l/126.0l)*temp) );
+        ldouble_safe temp = (ldouble_safe)1 / square(approx_sample_size);
+        return (ldouble_safe)2 * std::log(approx_sample_size) + (ldouble_safe)2*((ldouble_safe)EULERS_GAMMA - (ldouble_safe)1)
+               + ((ldouble_safe)1/approx_sample_size)
+               - temp * ( (ldouble_safe)1/(ldouble_safe)6 -   temp * ((ldouble_safe)1/(ldouble_safe)60 - ((ldouble_safe)1/(ldouble_safe)126)*temp) );
     }
 }
 
@@ -285,23 +273,22 @@ double expected_separation_depth_hotstart(double curr, size_t n_curr, size_t n_f
 }
 
 /* linear interpolation */
-double expected_separation_depth(long double n)
+template <class ldouble_safe>
+double expected_separation_depth(ldouble_safe n)
 {
     if (n >= THRESHOLD_EXACT_S)
         return 3;
     double s_l = expected_separation_depth((size_t) std::floor(n));
-    long double u = std::ceil(n);
+    ldouble_safe u = std::ceil(n);
     double s_u = s_l + (-s_l * u + 3. * u - 4.) / (u * (u - 1.));
     double diff = n - std::floor(n);
     return s_l + diff * s_u;
 }
 
-#define ix_comb_(i, j, n, ncomb) (  ((ncomb)  + ((j) - (i))) - (size_t)1 - div2(((n) - (i)) * ((n) - (i) - (size_t)1))  )
-#define ix_comb(i, j, n, ncomb) (  ((i) < (j))? ix_comb_(i, j, n, ncomb) : ix_comb_(j, i, n, ncomb)  )
 void increase_comb_counter(size_t ix_arr[], size_t st, size_t end, size_t n, double counter[], double exp_remainder)
 {
     size_t i, j;
-    size_t ncomb = ((n % 2) == 0)? (div2(n) * (n-(size_t)1)) : (n * div2(n-(size_t)1));
+    size_t ncomb = calc_ncomb(n);
     if (exp_remainder <= 1)
         for (size_t el1 = st; el1 < end; el1++)
         {
@@ -327,7 +314,7 @@ void increase_comb_counter(size_t ix_arr[], size_t st, size_t end, size_t n,
                            double *restrict counter, double *restrict weights, double exp_remainder)
 {
     size_t i, j;
-    size_t ncomb = ((n % 2) == 0)? (div2(n) * (n-(size_t)1)) : (n * div2(n-(size_t)1));
+    size_t ncomb = calc_ncomb(n);
     if (exp_remainder <= 1)
         for (size_t el1 = st; el1 < end; el1++)
         {
@@ -353,7 +340,7 @@ void increase_comb_counter(size_t ix_arr[], size_t st, size_t end, size_t n,
                            double counter[], hashed_map<size_t, double> &weights, double exp_remainder)
 {
     size_t i, j;
-    size_t ncomb = ((n % 2) == 0)? (div2(n) * (n-(size_t)1)) : (n * div2(n-(size_t)1));
+    size_t ncomb = calc_ncomb(n);
     if (exp_remainder <= 1)
         for (size_t el1 = st; el1 < end; el1++)
         {
@@ -377,13 +364,8 @@ void increase_comb_counter(size_t ix_arr[], size_t st, size_t end, size_t n,
 void increase_comb_counter_in_groups(size_t ix_arr[], size_t st, size_t end, size_t split_ix, size_t n,
                                      double counter[], double exp_remainder)
 {
-    size_t n_group = 0;
-    for (size_t ix = st; ix <= end; ix++)
-        if (ix_arr[ix] < split_ix)
-            n_group++;
-        else
-            break;
-
+    size_t *ptr_split_ix = std::lower_bound(ix_arr + st, ix_arr + end + 1, split_ix);
+    size_t n_group = std::distance(ix_arr + st, ptr_split_ix);
     n = n - split_ix;
 
     if (exp_remainder <= 1)
@@ -399,13 +381,8 @@ void increase_comb_counter_in_groups(size_t ix_arr[], size_t st, size_t end, siz
 void increase_comb_counter_in_groups(size_t ix_arr[], size_t st, size_t end, size_t split_ix, size_t n,
                                      double *restrict counter, double *restrict weights, double exp_remainder)
 {
-    size_t n_group = 0;
-    for (size_t ix = st; ix <= end; ix++)
-        if (ix_arr[ix] < split_ix)
-            n_group++;
-        else
-            break;
-
+    size_t *ptr_split_ix = std::lower_bound(ix_arr + st, ix_arr + end + 1, split_ix);
+    size_t n_group = std::distance(ix_arr + st, ptr_split_ix);
     n = n - split_ix;
 
     if (exp_remainder <= 1)
@@ -422,9 +399,9 @@ void increase_comb_counter_in_groups(size_t ix_arr[], size_t st, size_t end, siz
                 weights[ix_arr[ix1]] * weights[ix_arr[ix2]] * exp_remainder;
 }
 
-void tmat_to_dense(double *restrict tmat, double *restrict dmat, size_t n, bool diag_to_one)
+void tmat_to_dense(double *restrict tmat, double *restrict dmat, size_t n, double fill_diag)
 {
-    size_t ncomb = ((n % 2) == 0)? (div2(n) * (n-(size_t)1)) : (n * div2(n-(size_t)1));
+    size_t ncomb = calc_ncomb(n);
     for (size_t i = 0; i < (n-1); i++)
     {
         for (size_t j = i + 1; j < n; j++)
@@ -433,12 +410,8 @@ void tmat_to_dense(double *restrict tmat, double *restrict dmat, size_t n, bool 
             dmat[i + j * n] = dmat[j + i * n] = tmat[ix_comb(i, j, n, ncomb)];
         }
     }
-    if (diag_to_one)
-        for (size_t i = 0; i < n; i++)
-            dmat[i + i * n] = 1;
-    else
-        for (size_t i = 0; i < n; i++)
-            dmat[i + i * n] = 0;
+    for (size_t i = 0; i < n; i++)
+        dmat[i + i * n] = fill_diag;
 }
 
 template <class real_t>
@@ -468,7 +441,7 @@ void build_btree_sampler(std::vector<double> &btree_weights, real_t *restrict sa
     }
 }
 
-template <class real_t>
+template <class real_t, class ldouble_safe>
 void sample_random_rows(std::vector<size_t> &restrict ix_arr, size_t nrows, bool with_replacement,
                         RNG_engine &rnd_generator, std::vector<size_t> &restrict ix_all,
                         real_t *restrict sample_weights, std::vector<double> &restrict btree_weights,
@@ -584,7 +557,7 @@ void sample_random_rows(std::vector<size_t> &restrict ix_arr, size_t nrows, bool
             size_t candidate;
 
             /* if the sample size is relatively large, use a temporary boolean vector */
-            if (((long double)ntake / (long double)nrows) > (1. / 50.))
+            if (((ldouble_safe)ntake / (ldouble_safe)nrows) > (1. / 50.))
             {
 
                 if (is_repeated.empty())
@@ -699,23 +672,40 @@ void weighted_shuffle(size_t *restrict outp, size_t n, real_t *restrict weights,
     }
 }
 
-double sample_random_uniform(double xmin, double xmax, RNG_engine &rng)
+double sample_random_uniform(double xmin, double xmax, RNG_engine &rng) noexcept
 {
     double out;
     std::uniform_real_distribution<double> runif(xmin, xmax);
     for (int attempt = 0; attempt < 100; attempt++)
     {
         out = runif(rng);
-        if (out < xmax) return out;
+        if (likely(out < xmax)) return out;
     }
     return xmin;
+}
+
+template <class ldouble_safe>
+template <class other_t>
+ColumnSampler<ldouble_safe>& ColumnSampler<ldouble_safe>::operator=(const ColumnSampler<other_t> &other)
+{
+    this->col_indices = other.col_indices;
+    this->tree_weights = other.tree_weights;
+    this->curr_pos = other.curr_pos;
+    this->curr_col = other.curr_col;
+    this->last_given = other.last_given;
+    this->n_cols = other.n_cols;
+    this->tree_levels = other.tree_levels;
+    this->offset = other.offset;
+    this->n_dropped = other.n_dropped;
+    return *this;
 }
 
 /*  This one samples with replacement. When using weights, the algorithm is the
     same as for the row sampler, but keeping the weights after taking each iteration. */
 /*  TODO: this column sampler could use coroutines from C++20 once compilers implement them. */
+template <class ldouble_safe>
 template <class real_t>
-void ColumnSampler::initialize(real_t weights[], size_t n_cols)
+void ColumnSampler<ldouble_safe>::initialize(real_t weights[], size_t n_cols)
 {
     this->n_cols = n_cols;
     this->tree_levels = log2ceil(n_cols);
@@ -735,7 +725,7 @@ void ColumnSampler::initialize(real_t weights[], size_t n_cols)
         this->tree_weights[ix_parent(ix)] += this->tree_weights[ix];
 
     /* if the weights are invalid, make it an unweighted sampler */
-    if (isnan(this->tree_weights[0]) || this->tree_weights[0] <= 0)
+    if (unlikely(isnan(this->tree_weights[0]) || this->tree_weights[0] <= 0))
     {
         this->drop_weights();
     }
@@ -743,7 +733,8 @@ void ColumnSampler::initialize(real_t weights[], size_t n_cols)
     this->n_dropped = 0;
 }
 
-void ColumnSampler::drop_weights()
+template <class ldouble_safe>
+void ColumnSampler<ldouble_safe>::drop_weights()
 {
     this->tree_weights.clear();
     this->tree_weights.shrink_to_fit();
@@ -751,12 +742,14 @@ void ColumnSampler::drop_weights()
     this->n_dropped = 0;
 }
 
-bool ColumnSampler::has_weights()
+template <class ldouble_safe>
+bool ColumnSampler<ldouble_safe>::has_weights()
 {
     return !this->tree_weights.empty();
 }
 
-void ColumnSampler::initialize(size_t n_cols)
+template <class ldouble_safe>
+void ColumnSampler<ldouble_safe>::initialize(size_t n_cols)
 {
     if (!this->has_weights())
     {
@@ -770,7 +763,8 @@ void ColumnSampler::initialize(size_t n_cols)
 /* TODO: this one should instead call the same function for sampling rows,
    and should be done at the time of initialization so as to avoid allocating
    and filling the whole array. That way it'd be faster and use less memory. */
-void ColumnSampler::leave_m_cols(size_t m, RNG_engine &rnd_generator)
+template <class ldouble_safe>
+void ColumnSampler<ldouble_safe>::leave_m_cols(size_t m, RNG_engine &rnd_generator)
 {
     if (m == 0 || m >= this->n_cols)
         return;
@@ -787,7 +781,7 @@ void ColumnSampler::leave_m_cols(size_t m, RNG_engine &rnd_generator)
             }
         }
 
-        else if ((long double)m >= (long double)(3./4.) * (long double)this->n_cols)
+        else if ((ldouble_safe)m >= (ldouble_safe)(3./4.) * (ldouble_safe)this->n_cols)
         {
             for (this->curr_pos = this->n_cols-1; this->curr_pos > this->n_cols - m; this->curr_pos--)
             {
@@ -860,7 +854,8 @@ void ColumnSampler::leave_m_cols(size_t m, RNG_engine &rnd_generator)
     }
 }
 
-void ColumnSampler::drop_col(size_t col, size_t nobs_left)
+template <class ldouble_safe>
+void ColumnSampler<ldouble_safe>::drop_col(size_t col, size_t nobs_left)
 {
     if (!this->has_weights())
     {
@@ -903,19 +898,22 @@ void ColumnSampler::drop_col(size_t col, size_t nobs_left)
     }
 }
 
-void ColumnSampler::drop_col(size_t col)
+template <class ldouble_safe>
+void ColumnSampler<ldouble_safe>::drop_col(size_t col)
 {
     this->drop_col(col, SIZE_MAX);
 }
 
 /* to be used exclusively when initializing the density calculator,
    and only when 'col_indices' is a straight range with no dropped columns */
-void ColumnSampler::drop_from_tail(size_t col)
+template <class ldouble_safe>
+void ColumnSampler<ldouble_safe>::drop_from_tail(size_t col)
 {
     std::swap(this->col_indices[col], this->col_indices[--this->curr_pos]);
 }
 
-void ColumnSampler::prepare_full_pass()
+template <class ldouble_safe>
+void ColumnSampler<ldouble_safe>::prepare_full_pass()
 {
     this->curr_col = 0;
 
@@ -932,7 +930,8 @@ void ColumnSampler::prepare_full_pass()
     }
 }
 
-bool ColumnSampler::sample_col(size_t &col, RNG_engine &rnd_generator)
+template <class ldouble_safe>
+bool ColumnSampler<ldouble_safe>::sample_col(size_t &col, RNG_engine &rnd_generator)
 {
     if (!this->has_weights())
     {
@@ -978,7 +977,8 @@ bool ColumnSampler::sample_col(size_t &col, RNG_engine &rnd_generator)
     }
 }
 
-bool ColumnSampler::sample_col(size_t &col)
+template <class ldouble_safe>
+bool ColumnSampler<ldouble_safe>::sample_col(size_t &col)
 {
     if (this->curr_pos == this->curr_col || this->curr_pos == 0)
         return false;
@@ -987,7 +987,8 @@ bool ColumnSampler::sample_col(size_t &col)
     return true;
 }
 
-void ColumnSampler::shuffle_remainder(RNG_engine &rnd_generator)
+template <class ldouble_safe>
+void ColumnSampler<ldouble_safe>::shuffle_remainder(RNG_engine &rnd_generator)
 {
     if (!this->has_weights())
     {
@@ -1042,7 +1043,8 @@ void ColumnSampler::shuffle_remainder(RNG_engine &rnd_generator)
     }
 }
 
-size_t ColumnSampler::get_remaining_cols()
+template <class ldouble_safe>
+size_t ColumnSampler<ldouble_safe>::get_remaining_cols()
 {
     if (!this->has_weights())
         return this->curr_pos;
@@ -1050,7 +1052,30 @@ size_t ColumnSampler::get_remaining_cols()
         return this->n_cols - this->n_dropped;
 }
 
-bool SingleNodeColumnSampler::initialize
+template <class ldouble_safe>
+void ColumnSampler<ldouble_safe>::get_array_remaining_cols(std::vector<size_t> &restrict cols)
+{
+    if (!this->has_weights())
+    {
+        cols.assign(this->col_indices.begin(), this->col_indices.begin() + this->curr_pos);
+        std::sort(cols.begin(), cols.begin() + this->curr_pos);
+    }
+
+    else
+    {
+        size_t n_rem = 0;
+        for (size_t col = 0; col < this->n_cols; col++)
+        {
+            if (this->tree_weights[col + this->offset] > 0)
+            {
+                cols[n_rem++] = col;
+            }
+        }
+    }
+}
+
+template<class ldouble_safe, class real_t>
+bool SingleNodeColumnSampler<ldouble_safe, real_t>::initialize
 (
     double *restrict weights,
     std::vector<size_t> *col_indices,
@@ -1173,7 +1198,8 @@ bool SingleNodeColumnSampler::initialize
     return true;
 }
 
-bool SingleNodeColumnSampler::sample_col(size_t &col_chosen, RNG_engine &rnd_generator)
+template <class ldouble_safe, class real_t>
+bool SingleNodeColumnSampler<ldouble_safe, real_t>::sample_col(size_t &col_chosen, RNG_engine &rnd_generator)
 {
     if (!this->using_tree)
     {
@@ -1208,7 +1234,7 @@ bool SingleNodeColumnSampler::sample_col(size_t &col_chosen, RNG_engine &rnd_gen
             this->cumw = 0;
             for (size_t col = 0; col < this->curr_pos; col++)
                 this->cumw += this->weights_orig[this->col_indices[col]];
-            if (this->cumw <= 0)
+            if (unlikely(this->cumw <= 0))
                 unexpected_error();
         }
 
@@ -1283,7 +1309,8 @@ bool SingleNodeColumnSampler::sample_col(size_t &col_chosen, RNG_engine &rnd_gen
     }
 }
 
-void SingleNodeColumnSampler::backup(SingleNodeColumnSampler &other, size_t ncols_tot)
+template <class ldouble_safe, class real_t>
+void SingleNodeColumnSampler<ldouble_safe, real_t>::backup(SingleNodeColumnSampler &other, size_t ncols_tot)
 {
     other.n_inf = this->n_inf;
     other.n_left = this->n_left;
@@ -1325,7 +1352,8 @@ void SingleNodeColumnSampler::backup(SingleNodeColumnSampler &other, size_t ncol
     }
 }
 
-void SingleNodeColumnSampler::restore(const SingleNodeColumnSampler &other)
+template <class ldouble_safe, class real_t>
+void SingleNodeColumnSampler<ldouble_safe, real_t>::restore(const SingleNodeColumnSampler &other)
 {
     this->n_inf = other.n_inf;
     this->n_left = other.n_left;
@@ -1354,8 +1382,8 @@ void SingleNodeColumnSampler::restore(const SingleNodeColumnSampler &other)
     }
 }
 
-
-void DensityCalculator::initialize(size_t max_depth, int max_categ, bool reserve_counts, ScoringMetric scoring_metric)
+template <class ldouble_safe, class real_t>
+void DensityCalculator<ldouble_safe, real_t>::initialize(size_t max_depth, int max_categ, bool reserve_counts, ScoringMetric scoring_metric)
 {
     this->multipliers.reserve(max_depth+3);
     this->multipliers.clear();
@@ -1370,11 +1398,12 @@ void DensityCalculator::initialize(size_t max_depth, int max_categ, bool reserve
     }
 }
 
+template <class ldouble_safe, class real_t>
 template <class InputData>
-void DensityCalculator::initialize_bdens(const InputData &input_data,
+void DensityCalculator<ldouble_safe, real_t>::initialize_bdens(const InputData &input_data,
                                          const ModelParams &model_params,
                                          std::vector<size_t> &ix_arr,
-                                         ColumnSampler &col_sampler)
+                                         ColumnSampler<ldouble_safe> &col_sampler)
 {
     this->fast_bratio = model_params.fast_bratio;
     if (this->fast_bratio)
@@ -1498,11 +1527,12 @@ void DensityCalculator::initialize_bdens(const InputData &input_data,
         this->ncat_orig = this->ncat;
 }
 
+template<class ldouble_safe, class real_t>
 template <class InputData>
-void DensityCalculator::initialize_bdens_ext(const InputData &input_data,
+void DensityCalculator<ldouble_safe, real_t>::initialize_bdens_ext(const InputData &input_data,
                                              const ModelParams &model_params,
                                              std::vector<size_t> &ix_arr,
-                                             ColumnSampler &col_sampler,
+                                             ColumnSampler<ldouble_safe> &col_sampler,
                                              bool col_sampler_is_fresh)
 {
     this->vals_ext_box.reserve(model_params.max_depth + 3);
@@ -1610,7 +1640,8 @@ void DensityCalculator::initialize_bdens_ext(const InputData &input_data,
     // }
 }
 
-void DensityCalculator::push_density(double xmin, double xmax, double split_point)
+template<class ldouble_safe, class real_t>
+void DensityCalculator<ldouble_safe, real_t>::push_density(double xmin, double xmax, double split_point)
 {
     if (std::isinf(xmax) || std::isinf(xmin) || std::isnan(xmin) || std::isnan(xmax) || std::isnan(split_point))
     {
@@ -1642,13 +1673,15 @@ void DensityCalculator::push_density(double xmin, double xmax, double split_poin
     this->multipliers.push_back(curr + mult_left);
 }
 
-void DensityCalculator::push_density(int n_left, int n_present)
+template<class ldouble_safe, class real_t>
+void DensityCalculator<ldouble_safe, real_t>::push_density(int n_left, int n_present)
 {
     this->push_density(0., (double)n_present, (double)n_left);
 }
 
 /* For single category splits */
-void DensityCalculator::push_density(size_t counts[], int ncat)
+template<class ldouble_safe, class real_t>
+void DensityCalculator<ldouble_safe, real_t>::push_density(size_t counts[], int ncat)
 {
     /* this one assumes 'categ_present' has entries 0/1 for missing/present */
     int n_present = 0;
@@ -1658,19 +1691,22 @@ void DensityCalculator::push_density(size_t counts[], int ncat)
 }
 
 /* For single category splits */
-void DensityCalculator::push_density(int n_present)
+template<class ldouble_safe, class real_t>
+void DensityCalculator<ldouble_safe, real_t>::push_density(int n_present)
 {
     this->push_density(0., (double)n_present, 1.);
 }
 
 /* For binary categorical splits */
-void DensityCalculator::push_density()
+template<class ldouble_safe, class real_t>
+void DensityCalculator<ldouble_safe, real_t>::push_density()
 {
     this->multipliers.push_back(0);
     this->multipliers.push_back(0);
 }
 
-void DensityCalculator::push_adj(double xmin, double xmax, double split_point, double pct_tree_left, ScoringMetric scoring_metric)
+template<class ldouble_safe, class real_t>
+void DensityCalculator<ldouble_safe, real_t>::push_adj(double xmin, double xmax, double split_point, double pct_tree_left, ScoringMetric scoring_metric)
 {
     double range = std::fmax(xmax - xmin, std::numeric_limits<double>::min());
     double dleft = std::fmax(split_point - xmin, std::numeric_limits<double>::min());
@@ -1715,7 +1751,8 @@ void DensityCalculator::push_adj(double xmin, double xmax, double split_point, d
     }
 }
 
-void DensityCalculator::push_adj(signed char *restrict categ_present, size_t *restrict counts, int ncat, ScoringMetric scoring_metric)
+template<class ldouble_safe, class real_t>
+void DensityCalculator<ldouble_safe, real_t>::push_adj(signed char *restrict categ_present, size_t *restrict counts, int ncat, ScoringMetric scoring_metric)
 {
     /* this one assumes 'categ_present' has entries -1/0/1 for missing/right/left */
     int cnt_cat_left = 0;
@@ -1733,12 +1770,13 @@ void DensityCalculator::push_adj(signed char *restrict categ_present, size_t *re
         }
     }
 
-    double pct_tree_left = (long double)cnt_left / (long double)cnt;
+    double pct_tree_left = (ldouble_safe)cnt_left / (ldouble_safe)cnt;
     this->push_adj(0., (double)cnt_cat, (double)cnt_cat_left, pct_tree_left, scoring_metric);
 }
 
 /* For single category splits */
-void DensityCalculator::push_adj(size_t *restrict counts, int ncat, int chosen_cat, ScoringMetric scoring_metric)
+template<class ldouble_safe, class real_t>
+void DensityCalculator<ldouble_safe, real_t>::push_adj(size_t *restrict counts, int ncat, int chosen_cat, ScoringMetric scoring_metric)
 {
     /* this one assumes 'categ_present' has entries 0/1 for missing/present */
     int cnt_cat = 0;
@@ -1749,17 +1787,19 @@ void DensityCalculator::push_adj(size_t *restrict counts, int ncat, int chosen_c
         cnt_cat += counts[cat] > 0;
     }
 
-    double pct_tree_left = (long double)counts[chosen_cat] / (long double)cnt;
+    double pct_tree_left = (ldouble_safe)counts[chosen_cat] / (ldouble_safe)cnt;
     this->push_adj(0., (double)cnt_cat, 1., pct_tree_left, scoring_metric);
 }
 
 /* For binary categorical splits */
-void DensityCalculator::push_adj(double pct_tree_left, ScoringMetric scoring_metric)
+template<class ldouble_safe, class real_t>
+void DensityCalculator<ldouble_safe, real_t>::push_adj(double pct_tree_left, ScoringMetric scoring_metric)
 {
     this->push_adj(0., 1., 0.5, pct_tree_left, scoring_metric);
 }
 
-void DensityCalculator::push_bdens(double split_point, size_t col)
+template<class ldouble_safe, class real_t>
+void DensityCalculator<ldouble_safe, real_t>::push_bdens(double split_point, size_t col)
 {
     if (this->fast_bratio)
         this->push_bdens_fast_route(split_point, col);
@@ -1767,13 +1807,15 @@ void DensityCalculator::push_bdens(double split_point, size_t col)
         this->push_bdens_internal(split_point, col);
 }
 
-void DensityCalculator::push_bdens_internal(double split_point, size_t col)
+template<class ldouble_safe, class real_t>
+void DensityCalculator<ldouble_safe, real_t>::push_bdens_internal(double split_point, size_t col)
 {
     this->queue_box.push_back(this->box_high[col]);
     this->box_high[col] = split_point;
 }
 
-void DensityCalculator::push_bdens_fast_route(double split_point, size_t col)
+template<class ldouble_safe, class real_t>
+void DensityCalculator<ldouble_safe, real_t>::push_bdens_fast_route(double split_point, size_t col)
 {
     ldouble_safe curr_range = (ldouble_safe)this->box_high[col] - (ldouble_safe)this->box_low[col];
     ldouble_safe fraction_left  =  ((ldouble_safe)split_point - (ldouble_safe)this->box_low[col]) / curr_range;
@@ -1792,7 +1834,8 @@ void DensityCalculator::push_bdens_fast_route(double split_point, size_t col)
     this->push_bdens_internal(split_point, col);
 }
 
-void DensityCalculator::push_bdens(int ncat_branch_left, size_t col)
+template<class ldouble_safe, class real_t>
+void DensityCalculator<ldouble_safe, real_t>::push_bdens(int ncat_branch_left, size_t col)
 {
     if (this->fast_bratio)
         this->push_bdens_fast_route(ncat_branch_left, col);
@@ -1800,13 +1843,15 @@ void DensityCalculator::push_bdens(int ncat_branch_left, size_t col)
         this->push_bdens_internal(ncat_branch_left, col);
 }
 
-void DensityCalculator::push_bdens_internal(int ncat_branch_left, size_t col)
+template<class ldouble_safe, class real_t>
+void DensityCalculator<ldouble_safe, real_t>::push_bdens_internal(int ncat_branch_left, size_t col)
 {
     this->queue_ncat.push_back(this->ncat[col]);
     this->ncat[col] = ncat_branch_left;
 }
 
-void DensityCalculator::push_bdens_fast_route(int ncat_branch_left, size_t col)
+template<class ldouble_safe, class real_t>
+void DensityCalculator<ldouble_safe, real_t>::push_bdens_fast_route(int ncat_branch_left, size_t col)
 {
     double fraction_left = std::log((double)ncat_branch_left / this->ncat[col]);
     double fraction_right = std::log((double)(this->ncat[col] - ncat_branch_left) / this->ncat[col]);
@@ -1817,7 +1862,8 @@ void DensityCalculator::push_bdens_fast_route(int ncat_branch_left, size_t col)
     this->push_bdens_internal(ncat_branch_left, col);
 }
 
-void DensityCalculator::push_bdens(const std::vector<signed char> &cat_split, size_t col)
+template<class ldouble_safe, class real_t>
+void DensityCalculator<ldouble_safe, real_t>::push_bdens(const std::vector<signed char> &cat_split, size_t col)
 {
     if (this->fast_bratio)
         this->push_bdens_fast_route(cat_split, col);
@@ -1825,7 +1871,8 @@ void DensityCalculator::push_bdens(const std::vector<signed char> &cat_split, si
         this->push_bdens_internal(cat_split, col);
 }
 
-void DensityCalculator::push_bdens_internal(const std::vector<signed char> &cat_split, size_t col)
+template<class ldouble_safe, class real_t>
+void DensityCalculator<ldouble_safe, real_t>::push_bdens_internal(const std::vector<signed char> &cat_split, size_t col)
 {
     int ncat_branch_left = 0;
     for (auto el : cat_split)
@@ -1833,7 +1880,8 @@ void DensityCalculator::push_bdens_internal(const std::vector<signed char> &cat_
     this->push_bdens_internal(ncat_branch_left, col);
 }
 
-void DensityCalculator::push_bdens_fast_route(const std::vector<signed char> &cat_split, size_t col)
+template<class ldouble_safe, class real_t>
+void DensityCalculator<ldouble_safe, real_t>::push_bdens_fast_route(const std::vector<signed char> &cat_split, size_t col)
 {
     int ncat_branch_left = 0;
     for (auto el : cat_split)
@@ -1841,7 +1889,8 @@ void DensityCalculator::push_bdens_fast_route(const std::vector<signed char> &ca
     this->push_bdens_fast_route(ncat_branch_left, col);
 }
 
-void DensityCalculator::push_bdens_ext(const IsoHPlane &hplane, const ModelParams &model_params)
+template<class ldouble_safe, class real_t>
+void DensityCalculator<ldouble_safe, real_t>::push_bdens_ext(const IsoHPlane &hplane, const ModelParams &model_params)
 {
     double x1, x2;
     double xlow = 0, xhigh = 0;
@@ -1917,17 +1966,20 @@ void DensityCalculator::push_bdens_ext(const IsoHPlane &hplane, const ModelParam
     this->vals_ext_box.push_back(std::log(chunk_left) + this->vals_ext_box.back());
 }
 
-void DensityCalculator::pop()
+template<class ldouble_safe, class real_t>
+void DensityCalculator<ldouble_safe, real_t>::pop()
 {
     this->multipliers.pop_back();
 }
 
-void DensityCalculator::pop_right()
+template<class ldouble_safe, class real_t>
+void DensityCalculator<ldouble_safe, real_t>::pop_right()
 {
     this->multipliers.pop_back();
 }
 
-void DensityCalculator::pop_bdens(size_t col)
+template<class ldouble_safe, class real_t>
+void DensityCalculator<ldouble_safe, real_t>::pop_bdens(size_t col)
 {
     if (this->fast_bratio)
         this->pop_bdens_fast_route(col);
@@ -1935,7 +1987,8 @@ void DensityCalculator::pop_bdens(size_t col)
         this->pop_bdens_internal(col);
 }
 
-void DensityCalculator::pop_bdens_internal(size_t col)
+template<class ldouble_safe, class real_t>
+void DensityCalculator<ldouble_safe, real_t>::pop_bdens_internal(size_t col)
 {
     double old_high = this->queue_box.back();
     this->queue_box.pop_back();
@@ -1944,13 +1997,15 @@ void DensityCalculator::pop_bdens_internal(size_t col)
     this->box_high[col] = old_high;
 }
 
-void DensityCalculator::pop_bdens_fast_route(size_t col)
+template<class ldouble_safe, class real_t>
+void DensityCalculator<ldouble_safe, real_t>::pop_bdens_fast_route(size_t col)
 {
     this->multipliers.pop_back();
     this->pop_bdens_internal(col);
 }
 
-void DensityCalculator::pop_bdens_right(size_t col)
+template<class ldouble_safe, class real_t>
+void DensityCalculator<ldouble_safe, real_t>::pop_bdens_right(size_t col)
 {
     if (this->fast_bratio)
         this->pop_bdens_right_fast_route(col);
@@ -1958,20 +2013,23 @@ void DensityCalculator::pop_bdens_right(size_t col)
         this->pop_bdens_right_internal(col);
 }
 
-void DensityCalculator::pop_bdens_right_internal(size_t col)
+template<class ldouble_safe, class real_t>
+void DensityCalculator<ldouble_safe, real_t>::pop_bdens_right_internal(size_t col)
 {
     double old_low = this->queue_box.back();
     this->queue_box.pop_back();
     this->box_low[col] = old_low;
 }
 
-void DensityCalculator::pop_bdens_right_fast_route(size_t col)
+template<class ldouble_safe, class real_t>
+void DensityCalculator<ldouble_safe, real_t>::pop_bdens_right_fast_route(size_t col)
 {
     this->multipliers.pop_back();
     this->pop_bdens_right_internal(col);
 }
 
-void DensityCalculator::pop_bdens_cat(size_t col)
+template<class ldouble_safe, class real_t>
+void DensityCalculator<ldouble_safe, real_t>::pop_bdens_cat(size_t col)
 {
     if (this->fast_bratio)
         this->pop_bdens_cat_fast_route(col);
@@ -1979,19 +2037,22 @@ void DensityCalculator::pop_bdens_cat(size_t col)
         this->pop_bdens_cat_internal(col);
 }
 
-void DensityCalculator::pop_bdens_cat_internal(size_t col)
+template<class ldouble_safe, class real_t>
+void DensityCalculator<ldouble_safe, real_t>::pop_bdens_cat_internal(size_t col)
 {
     int old_ncat = this->queue_ncat.back();
     this->ncat[col] = old_ncat - this->ncat[col];
 }
 
-void DensityCalculator::pop_bdens_cat_fast_route(size_t col)
+template<class ldouble_safe, class real_t>
+void DensityCalculator<ldouble_safe, real_t>::pop_bdens_cat_fast_route(size_t col)
 {
     this->multipliers.pop_back();
     this->pop_bdens_cat_internal(col);
 }
 
-void DensityCalculator::pop_bdens_cat_right(size_t col)
+template<class ldouble_safe, class real_t>
+void DensityCalculator<ldouble_safe, real_t>::pop_bdens_cat_right(size_t col)
 {
     if (this->fast_bratio)
         this->pop_bdens_cat_right_fast_route(col);
@@ -1999,50 +2060,58 @@ void DensityCalculator::pop_bdens_cat_right(size_t col)
         this->pop_bdens_cat_right_internal(col);
 }
 
-void DensityCalculator::pop_bdens_cat_right_internal(size_t col)
+template<class ldouble_safe, class real_t>
+void DensityCalculator<ldouble_safe, real_t>::pop_bdens_cat_right_internal(size_t col)
 {
     int old_ncat = this->queue_ncat.back();
     this->queue_ncat.pop_back();
     this->ncat[col] = old_ncat;
 }
 
-void DensityCalculator::pop_bdens_cat_right_fast_route(size_t col)
+template<class ldouble_safe, class real_t>
+void DensityCalculator<ldouble_safe, real_t>::pop_bdens_cat_right_fast_route(size_t col)
 {
     this->multipliers.pop_back();
     this->pop_bdens_cat_right_internal(col);
 }
 
-void DensityCalculator::pop_bdens_ext()
+template<class ldouble_safe, class real_t>
+void DensityCalculator<ldouble_safe, real_t>::pop_bdens_ext()
 {
     this->vals_ext_box.pop_back();
     this->vals_ext_box.push_back(this->queue_ext_box.back());
     this->queue_ext_box.pop_back();
 }
 
-void DensityCalculator::pop_bdens_ext_right()
+template<class ldouble_safe, class real_t>
+void DensityCalculator<ldouble_safe, real_t>::pop_bdens_ext_right()
 {
     this->vals_ext_box.pop_back();
 }
 
 /* this outputs the logarithm of the density */
-double DensityCalculator::calc_density(long double remainder, size_t sample_size)
+template<class ldouble_safe, class real_t>
+double DensityCalculator<ldouble_safe, real_t>::calc_density(ldouble_safe remainder, size_t sample_size)
 {
-    return std::log(remainder) - std::log((long double)sample_size) - this->multipliers.back();
+    return std::log(remainder) - std::log((ldouble_safe)sample_size) - this->multipliers.back();
 }
 
-ldouble_safe DensityCalculator::calc_adj_depth()
+template<class ldouble_safe, class real_t>
+ldouble_safe DensityCalculator<ldouble_safe, real_t>::calc_adj_depth()
 {
     ldouble_safe out = this->multipliers.back();
     return std::fmax(out, (ldouble_safe)std::numeric_limits<double>::min());
 }
 
-double DensityCalculator::calc_adj_density()
+template<class ldouble_safe, class real_t>
+double DensityCalculator<ldouble_safe, real_t>::calc_adj_density()
 {
     return this->multipliers.back();
 }
 
 /* this outputs the logarithm of the density */
-ldouble_safe DensityCalculator::calc_bratio_inv_log()
+template<class ldouble_safe, class real_t>
+ldouble_safe DensityCalculator<ldouble_safe, real_t>::calc_bratio_inv_log()
 {
     if (!this->multipliers.empty())
         return -this->multipliers.back();
@@ -2053,7 +2122,7 @@ ldouble_safe DensityCalculator::calc_bratio_inv_log()
     {
         if (!this->ranges[col]) continue;
         ratio_col = this->ranges[col] / ((ldouble_safe)this->box_high[col] - (ldouble_safe)this->box_low[col]);
-        ratio_col = std::fmax(ratio_col, 1.0l);
+        ratio_col = std::fmax(ratio_col, (ldouble_safe)1);
         sum_log_switdh += std::log(ratio_col);
     }
 
@@ -2066,7 +2135,8 @@ ldouble_safe DensityCalculator::calc_bratio_inv_log()
     return sum_log_switdh;
 }
 
-ldouble_safe DensityCalculator::calc_bratio_log()
+template<class ldouble_safe, class real_t>
+ldouble_safe DensityCalculator<ldouble_safe, real_t>::calc_bratio_log()
 {
     if (!this->multipliers.empty())
         return this->multipliers.back();
@@ -2092,7 +2162,8 @@ ldouble_safe DensityCalculator::calc_bratio_log()
 }
 
 /* this does NOT output the logarithm of the density */
-double DensityCalculator::calc_bratio()
+template<class ldouble_safe, class real_t>
+double DensityCalculator<ldouble_safe, real_t>::calc_bratio()
 {
     return std::exp(this->calc_bratio_log());
 }
@@ -2100,56 +2171,65 @@ double DensityCalculator::calc_bratio()
 const double MIN_DENS = std::log(std::numeric_limits<double>::min());
 
 /* this outputs the logarithm of the density */
-double DensityCalculator::calc_bdens(long double remainder, size_t sample_size)
+template<class ldouble_safe, class real_t>
+double DensityCalculator<ldouble_safe, real_t>::calc_bdens(ldouble_safe remainder, size_t sample_size)
 {
-    double out = std::log(remainder) - std::log((long double)sample_size) - this->calc_bratio_inv_log();
+    double out = std::log(remainder) - std::log((ldouble_safe)sample_size) - this->calc_bratio_inv_log();
     return std::fmax(out, MIN_DENS);
 }
 
 /* this outputs the logarithm of the density */
-double DensityCalculator::calc_bdens2(long double remainder, size_t sample_size)
+template<class ldouble_safe, class real_t>
+double DensityCalculator<ldouble_safe, real_t>::calc_bdens2(ldouble_safe remainder, size_t sample_size)
 {
-    double out = std::log(remainder) - std::log((long double)sample_size) - this->calc_bratio_log();
+    double out = std::log(remainder) - std::log((ldouble_safe)sample_size) - this->calc_bratio_log();
     return std::fmax(out, MIN_DENS);
 }
 
 /* this outputs the logarithm of the density */
-ldouble_safe DensityCalculator::calc_bratio_log_ext()
+template<class ldouble_safe, class real_t>
+ldouble_safe DensityCalculator<ldouble_safe, real_t>::calc_bratio_log_ext()
 {
     return this->vals_ext_box.back();
 }
 
-double DensityCalculator::calc_bratio_ext()
+template<class ldouble_safe, class real_t>
+double DensityCalculator<ldouble_safe, real_t>::calc_bratio_ext()
 {
     double out = std::exp(this->calc_bratio_log_ext());
     return std::fmax(out, std::numeric_limits<double>::min());
 }
 
 /* this outputs the logarithm of the density */
-double DensityCalculator::calc_bdens_ext(long double remainder, size_t sample_size)
+template<class ldouble_safe, class real_t>
+double DensityCalculator<ldouble_safe, real_t>::calc_bdens_ext(ldouble_safe remainder, size_t sample_size)
 {
-    double out = std::log(remainder) - std::log((long double)sample_size) - this->calc_bratio_log_ext();
+    double out = std::log(remainder) - std::log((ldouble_safe)sample_size) - this->calc_bratio_log_ext();
     return std::fmax(out, MIN_DENS);
 }
 
-void DensityCalculator::save_range(double xmin, double xmax)
+template<class ldouble_safe, class real_t>
+void DensityCalculator<ldouble_safe, real_t>::save_range(double xmin, double xmax)
 {
     this->xmin = xmin;
     this->xmax = xmax;
 }
 
-void DensityCalculator::restore_range(double &restrict xmin, double &restrict xmax)
+template<class ldouble_safe, class real_t>
+void DensityCalculator<ldouble_safe, real_t>::restore_range(double &restrict xmin, double &restrict xmax)
 {
     xmin = this->xmin;
     xmax = this->xmax;
 }
 
-void DensityCalculator::save_counts(size_t *restrict cat_counts, int ncat)
+template<class ldouble_safe, class real_t>
+void DensityCalculator<ldouble_safe, real_t>::save_counts(size_t *restrict cat_counts, int ncat)
 {
     this->counts.assign(cat_counts, cat_counts + ncat);
 }
 
-void DensityCalculator::save_n_present_and_left(signed char *restrict split_left, int ncat)
+template<class ldouble_safe, class real_t>
+void DensityCalculator<ldouble_safe, real_t>::save_n_present_and_left(signed char *restrict split_left, int ncat)
 {
     this->n_present = 0;
     this->n_left = 0;
@@ -2160,7 +2240,8 @@ void DensityCalculator::save_n_present_and_left(signed char *restrict split_left
     }
 }
 
-void DensityCalculator::save_n_present(size_t *restrict cat_counts, int ncat)
+template<class ldouble_safe, class real_t>
+void DensityCalculator<ldouble_safe, real_t>::save_n_present(size_t *restrict cat_counts, int ncat)
 {
     this->n_present = 0;
     for (int cat = 0; cat < ncat; cat++)
@@ -2168,7 +2249,7 @@ void DensityCalculator::save_n_present(size_t *restrict cat_counts, int ncat)
 }
 
 /* For hyperplane intersections */
-size_t divide_subset_split(size_t ix_arr[], double x[], size_t st, size_t end, double split_point)
+size_t divide_subset_split(size_t ix_arr[], double x[], size_t st, size_t end, double split_point) noexcept
 {
     size_t temp;
     size_t st_orig = st;
@@ -2188,7 +2269,7 @@ size_t divide_subset_split(size_t ix_arr[], double x[], size_t st, size_t end, d
 /* For numerical columns */
 template <class real_t>
 void divide_subset_split(size_t *restrict ix_arr, real_t x[], size_t st, size_t end, double split_point,
-                         MissingAction missing_action, size_t &restrict st_NA, size_t &restrict end_NA, size_t &restrict split_ix)
+                         MissingAction missing_action, size_t &restrict st_NA, size_t &restrict end_NA, size_t &restrict split_ix) noexcept
 {
     size_t temp;
 
@@ -2226,7 +2307,7 @@ void divide_subset_split(size_t *restrict ix_arr, real_t x[], size_t st, size_t 
 
         for (size_t row = st; row <= end; row++)
         {
-            if (isnan(x[ix_arr[row]]))
+            if (unlikely(isnan(x[ix_arr[row]])))
             {
                 temp        = ix_arr[st];
                 ix_arr[st]  = ix_arr[row];
@@ -2242,7 +2323,7 @@ void divide_subset_split(size_t *restrict ix_arr, real_t x[], size_t st, size_t 
 template <class real_t, class sparse_ix>
 void divide_subset_split(size_t *restrict ix_arr, size_t st, size_t end, size_t col_num,
                          real_t Xc[], sparse_ix *restrict Xc_ind, sparse_ix *restrict Xc_indptr, double split_point,
-                         MissingAction missing_action, size_t &restrict st_NA, size_t &restrict end_NA, size_t &restrict split_ix)
+                         MissingAction missing_action, size_t &restrict st_NA, size_t &restrict end_NA, size_t &restrict split_ix) noexcept
 {
     /* TODO: this is a mess, needs refactoring */
     /* TODO: when moving zeros, would be better to instead move by '>' (opposite as in here) */
@@ -2392,7 +2473,7 @@ void divide_subset_split(size_t *restrict ix_arr, size_t st, size_t end, size_t 
 
                 if (Xc_ind[curr_pos] == (sparse_ix)(*row))
                 {
-                    if (isnan(Xc[curr_pos]))
+                    if (unlikely(isnan(Xc[curr_pos])))
                         has_NAs = true;
                     else if (Xc[curr_pos] <= split_point)
                     {
@@ -2442,7 +2523,7 @@ void divide_subset_split(size_t *restrict ix_arr, size_t st, size_t end, size_t 
             {
                 if (Xc_ind[curr_pos] == (sparse_ix)(*row))
                 {
-                    if (isnan(Xc[curr_pos])) has_NAs = true;
+                    if (unlikely(isnan(Xc[curr_pos]))) has_NAs = true;
                     if (!isnan(Xc[curr_pos]) && Xc[curr_pos] <= split_point)
                     {
                         temp       = ix_arr[st];
@@ -2476,7 +2557,7 @@ void divide_subset_split(size_t *restrict ix_arr, size_t st, size_t end, size_t 
             {
                 if (Xc_ind[curr_pos] == (sparse_ix)(*row))
                 {
-                    if (isnan(Xc[curr_pos]))
+                    if (unlikely(isnan(Xc[curr_pos])))
                     {
                         temp       = ix_arr[st];
                         ix_arr[st] = *row;
@@ -2504,7 +2585,7 @@ void divide_subset_split(size_t *restrict ix_arr, size_t st, size_t end, size_t 
 
 /* For categorical columns split by subset */
 void divide_subset_split(size_t *restrict ix_arr, int x[], size_t st, size_t end, signed char split_categ[],
-                         MissingAction missing_action, size_t &restrict st_NA, size_t &restrict end_NA, size_t &restrict split_ix)
+                         MissingAction missing_action, size_t &restrict st_NA, size_t &restrict end_NA, size_t &restrict split_ix) noexcept
 {
     size_t temp;
 
@@ -2557,7 +2638,7 @@ void divide_subset_split(size_t *restrict ix_arr, int x[], size_t st, size_t end
 /* For categorical columns split by subset, used at prediction time (with similarity) */
 void divide_subset_split(size_t *restrict ix_arr, int x[], size_t st, size_t end, signed char split_categ[],
                          int ncat, MissingAction missing_action, NewCategAction new_cat_action,
-                         bool move_new_to_left, size_t &restrict st_NA, size_t &restrict end_NA, size_t &restrict split_ix)
+                         bool move_new_to_left, size_t &restrict st_NA, size_t &restrict end_NA, size_t &restrict split_ix) noexcept
 {
     size_t temp;
     int cval;
@@ -2658,7 +2739,7 @@ void divide_subset_split(size_t *restrict ix_arr, int x[], size_t st, size_t end
         {
             for (size_t row = st; row <= end; row++)
             {
-                if (x[ix_arr[row]] < 0)
+                if (unlikely(x[ix_arr[row]] < 0))
                 {
                     temp        = ix_arr[st];
                     ix_arr[st]  = ix_arr[row];
@@ -2758,7 +2839,7 @@ void divide_subset_split(size_t *restrict ix_arr, int x[], size_t st, size_t end
         {
             for (size_t row = st; row <= end; row++)
             {
-                if (x[ix_arr[row]] < 0)
+                if (unlikely(x[ix_arr[row]] < 0))
                 {
                     temp        = ix_arr[st];
                     ix_arr[st]  = ix_arr[row];
@@ -2774,7 +2855,7 @@ void divide_subset_split(size_t *restrict ix_arr, int x[], size_t st, size_t end
 
 /* For categoricals split on a single category */
 void divide_subset_split(size_t *restrict ix_arr, int x[], size_t st, size_t end, int split_categ,
-                         MissingAction missing_action, size_t &restrict st_NA, size_t &restrict end_NA, size_t &restrict split_ix)
+                         MissingAction missing_action, size_t &restrict st_NA, size_t &restrict end_NA, size_t &restrict split_ix) noexcept
 {
     size_t temp;
 
@@ -2812,7 +2893,7 @@ void divide_subset_split(size_t *restrict ix_arr, int x[], size_t st, size_t end
 
         for (size_t row = st; row <= end; row++)
         {
-            if (x[ix_arr[row]] < 0)
+            if (unlikely(x[ix_arr[row]] < 0))
             {
                 temp        = ix_arr[st];
                 ix_arr[st]  = ix_arr[row];
@@ -2827,7 +2908,7 @@ void divide_subset_split(size_t *restrict ix_arr, int x[], size_t st, size_t end
 /* For categoricals split on sub-set that turned out to have 2 categories only (prediction-time) */
 void divide_subset_split(size_t *restrict ix_arr, int x[], size_t st, size_t end,
                          MissingAction missing_action, NewCategAction new_cat_action,
-                         bool move_new_to_left, size_t &restrict st_NA, size_t &restrict end_NA, size_t &restrict split_ix)
+                         bool move_new_to_left, size_t &restrict st_NA, size_t &restrict end_NA, size_t &restrict split_ix) noexcept
 {
     size_t temp;
 
@@ -2884,7 +2965,7 @@ void divide_subset_split(size_t *restrict ix_arr, int x[], size_t st, size_t end
 
             for (size_t row = st; row <= end; row++)
             {
-                if (x[ix_arr[row]] < 0)
+                if (unlikely(x[ix_arr[row]] < 0))
                 {
                     temp        = ix_arr[st];
                     ix_arr[st]  = ix_arr[row];
@@ -2911,7 +2992,7 @@ void divide_subset_split(size_t *restrict ix_arr, int x[], size_t st, size_t end
 
             for (size_t row = st; row <= end; row++)
             {
-                if (x[ix_arr[row]] < 0)
+                if (unlikely(x[ix_arr[row]] < 0))
                 {
                     temp        = ix_arr[st];
                     ix_arr[st]  = ix_arr[row];
@@ -2927,7 +3008,7 @@ void divide_subset_split(size_t *restrict ix_arr, int x[], size_t st, size_t end
 /* for regular numeric columns */
 template <class real_t>
 void get_range(size_t ix_arr[], real_t *restrict x, size_t st, size_t end,
-               MissingAction missing_action, double &restrict xmin, double &restrict xmax, bool &unsplittable)
+               MissingAction missing_action, double &restrict xmin, double &restrict xmax, bool &unsplittable) noexcept
 {
     xmin =  HUGE_VAL;
     xmax = -HUGE_VAL;
@@ -2959,7 +3040,7 @@ void get_range(size_t ix_arr[], real_t *restrict x, size_t st, size_t end,
 
 template <class real_t>
 void get_range(real_t *restrict x, size_t n,
-               MissingAction missing_action, double &restrict xmin, double &restrict xmax, bool &unsplittable)
+               MissingAction missing_action, double &restrict xmin, double &restrict xmax, bool &unsplittable) noexcept
 {
     xmin =  HUGE_VAL;
     xmax = -HUGE_VAL;
@@ -2990,7 +3071,7 @@ void get_range(real_t *restrict x, size_t n,
 template <class real_t, class sparse_ix>
 void get_range(size_t *restrict ix_arr, size_t st, size_t end, size_t col_num,
                real_t *restrict Xc, sparse_ix *restrict Xc_ind, sparse_ix *restrict Xc_indptr,
-               MissingAction missing_action, double &restrict xmin, double &restrict xmax, bool &unsplittable)
+               MissingAction missing_action, double &restrict xmin, double &restrict xmax, bool &unsplittable) noexcept
 {
     /* ix_arr must already be sorted beforehand */
     xmin =  HUGE_VAL;
@@ -3086,7 +3167,7 @@ void get_range(size_t *restrict ix_arr, size_t st, size_t end, size_t col_num,
 template <class real_t, class sparse_ix>
 void get_range(size_t col_num, size_t nrows,
                real_t *restrict Xc, sparse_ix *restrict Xc_ind, sparse_ix *restrict Xc_indptr,
-               MissingAction missing_action, double &restrict xmin, double &restrict xmax, bool &unsplittable)
+               MissingAction missing_action, double &restrict xmin, double &restrict xmax, bool &unsplittable) noexcept
 {
     xmin =  HUGE_VAL;
     xmax = -HUGE_VAL;
@@ -3110,7 +3191,7 @@ void get_range(size_t col_num, size_t nrows,
     {
         for (auto ix = Xc_indptr[col_num]; ix < Xc_indptr[col_num+1]; ix++)
         {
-            if (std::isinf(Xc[ix])) continue;
+            if (unlikely(std::isinf(Xc[ix]))) continue;
             xmin = std::fmin(xmin, Xc[ix]);
             xmax = std::fmax(xmax, Xc[ix]);
         }
@@ -3121,12 +3202,12 @@ void get_range(size_t col_num, size_t nrows,
 
 
 void get_categs(size_t *restrict ix_arr, int x[], size_t st, size_t end, int ncat,
-                MissingAction missing_action, signed char categs[], size_t &restrict npresent, bool &unsplittable)
+                MissingAction missing_action, signed char categs[], size_t &restrict npresent, bool &unsplittable) noexcept
 {
     std::fill(categs, categs + ncat, -1);
     npresent = 0;
     for (size_t row = st; row <= end; row++)
-        if (x[ix_arr[row]] >= 0)
+        if (likely(x[ix_arr[row]] >= 0))
             categs[x[ix_arr[row]]] = 1;
 
     npresent = std::accumulate(categs,
@@ -3158,7 +3239,7 @@ bool check_more_than_two_unique_values(size_t ix_arr[], size_t st, size_t end, r
         size_t ix;
         for (ix = st; ix <= end; ix++)
         {
-            if (!is_na_or_inf(x[ix_arr[ix]]))
+            if (likely(!is_na_or_inf(x[ix_arr[ix]])))
             {
                 x0 = x[ix_arr[ix]];
                 ix++;
@@ -3335,7 +3416,7 @@ void count_categs(size_t *restrict ix_arr, size_t st, size_t end, int x[], int n
 {
     std::fill(counts, counts + ncat, (size_t)0);
     for (size_t row = st; row <= end; row++)
-        if (x[ix_arr[row]] >= 0)
+        if (likely(x[ix_arr[row]] >= 0))
             counts[x[ix_arr[row]]]++;
 }
 
@@ -3344,7 +3425,7 @@ int count_ncateg_in_col(const int x[], const size_t n, const int ncat, unsigned 
     memset(buffer, 0, ncat*sizeof(char));
     for (size_t ix = 0; ix < n; ix++)
     {
-        if (x[ix] >= 0) buffer[x[ix]] = true;
+        if (likely(x[ix] >= 0)) buffer[x[ix]] = true;
     }
 
     int ncat_present = 0;
@@ -3353,6 +3434,7 @@ int count_ncateg_in_col(const int x[], const size_t n, const int ncat, unsigned 
     return ncat_present;
 }
 
+template <class ldouble_safe>
 ldouble_safe calculate_sum_weights(std::vector<size_t> &ix_arr, size_t st, size_t end, size_t curr_depth,
                                    std::vector<double> &weights_arr, hashed_map<size_t, double> &weights_map)
 {
@@ -3378,7 +3460,7 @@ size_t move_NAs_to_front(size_t ix_arr[], size_t st, size_t end, real_t x[])
 
     for (size_t row = st; row <= end; row++)
     {
-        if (is_na_or_inf(x[ix_arr[row]]))
+        if (unlikely(is_na_or_inf(x[ix_arr[row]])))
         {
             temp = ix_arr[st_non_na];
             ix_arr[st_non_na] = ix_arr[row];
@@ -3409,7 +3491,7 @@ size_t move_NAs_to_front(size_t *restrict ix_arr, size_t st, size_t end, size_t 
     {
         if (Xc_ind[curr_pos] == *row)
         {
-            if (is_na_or_inf(Xc[curr_pos]))
+            if (unlikely(is_na_or_inf(Xc[curr_pos])))
             {
                 temp = ix_arr[st_non_na];
                 ix_arr[st_non_na] = *row;
@@ -3440,7 +3522,7 @@ size_t move_NAs_to_front(size_t ix_arr[], size_t st, size_t end, int x[])
 
     for (size_t row = st; row <= end; row++)
     {
-        if (x[ix_arr[row]] < 0)
+        if (unlikely(x[ix_arr[row]] < 0))
         {
             temp = ix_arr[st_non_na];
             ix_arr[st_non_na] = ix_arr[row];
@@ -3560,6 +3642,68 @@ void todense(size_t *restrict ix_arr, size_t st, size_t end,
 }
 
 
+template <class real_t>
+void colmajor_to_rowmajor(real_t *restrict X, size_t nrows, size_t ncols, std::vector<double> &X_row_major)
+{
+    X_row_major.resize(nrows * ncols);
+    for (size_t row = 0; row < nrows; row++)
+        for (size_t col = 0; col < ncols; col++)
+            X_row_major[row + col*nrows] = X[col + row*ncols];
+}
+
+template <class real_t, class sparse_ix>
+void colmajor_to_rowmajor(real_t *restrict Xc, sparse_ix *restrict Xc_ind, sparse_ix *restrict Xc_indptr,
+                          size_t nrows, size_t ncols,
+                          std::vector<double> &Xr, std::vector<size_t> &Xr_ind, std::vector<size_t> &Xr_indptr)
+{
+    /* First convert to COO */
+    size_t nnz = Xc_indptr[ncols];
+    std::vector<size_t> row_indices(nnz);
+    for (size_t col = 0; col < ncols; col++)
+    {
+        for (sparse_ix ix = Xc_indptr[col]; ix < Xc_indptr[col+1]; ix++)
+        {
+            row_indices[ix] = Xc_ind[ix];
+        }
+    }
+
+    /* Then copy the data argsorted by rows */
+    std::vector<size_t> argsorted_indices(nnz);
+    std::iota(argsorted_indices.begin(), argsorted_indices.end(), (size_t)0);
+    std::stable_sort(argsorted_indices.begin(), argsorted_indices.end(),
+                     [&row_indices](const size_t a, const size_t b)
+                     {return row_indices[a] < row_indices[b];});
+    Xr.resize(nnz);
+    Xr_ind.resize(nnz);
+    for (size_t ix = 0; ix < nnz; ix++)
+    {
+        Xr[ix] = Xc[argsorted_indices[ix]];
+        Xr_ind[ix] = Xc_ind[argsorted_indices[ix]];
+    }
+
+    /* Now build the index pointer */
+    Xr_indptr.resize(nrows+1);
+    size_t curr_row = 0;
+    size_t curr_n = 0;
+    for (size_t ix = 0; ix < nnz; ix++)
+    {
+        if (row_indices[argsorted_indices[ix]] != curr_row)
+        {
+            Xr_indptr[curr_row+1] = curr_n;
+            curr_n = 0;
+            curr_row = row_indices[argsorted_indices[ix]];
+        }
+
+        else
+        {
+            curr_n++;
+        }
+    }
+    for (size_t row = 1; row < nrows; row++)
+        Xr_indptr[row+1] += Xr_indptr[row];
+}
+
+
 bool interrupt_switch = false;
 bool handle_is_locked = false;
 
@@ -3640,6 +3784,15 @@ void SignalSwitcher::restore_handle()
             handle_is_locked = false;
         }
     }
+}
+
+bool has_long_double()
+{
+    #ifndef NO_LONG_DOUBLE
+    return sizeof(long double) > sizeof(double);
+    #else
+    return false;
+    #endif
 }
 
 /* Return the #def'd constants from standard header. This is in order to determine if the return

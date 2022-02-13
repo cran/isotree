@@ -34,6 +34,10 @@
 *     [13] Cortes, David.
 *          "Isolation forests: looking beyond tree depth."
 *          arXiv preprint arXiv:2111.11639 (2021).
+*     [14] Ting, Kai Ming, Yue Zhu, and Zhi-Hua Zhou.
+*          "Isolation kernel and its effect on SVM"
+*          Proceedings of the 24th ACM SIGKDD
+*          International Conference on Knowledge Discovery & Data Mining. 2018.
 * 
 *     BSD 2-Clause License
 *     Copyright (c) 2019-2022, David Cortes
@@ -137,11 +141,11 @@ std::string generate_sql_with_select_from(IsoForest *model_outputs, ExtIsoForest
                                                 + std::to_string((size_t)std::distance(tree_conds.data(), &b) + (size_t)index1)
                                                 + std::string("---\n");});
     size_t ntrees = (model_outputs != NULL)? (model_outputs->trees.size()) : (model_outputs_ext->hplanes.size());
-   return
+    return
        out
         + std::string(") / ")
-        + std::to_string((long double)ntrees * ((model_outputs != NULL)?
-                                                (model_outputs->exp_avg_depth) : (model_outputs_ext->exp_avg_depth)))
+        + std::to_string((double)ntrees * ((model_outputs != NULL)?
+                                           (model_outputs->exp_avg_depth) : (model_outputs_ext->exp_avg_depth)))
         + std::string(") AS ")
         + select_as
         + std::string("\nFROM ")
@@ -230,7 +234,7 @@ std::vector<std::string> generate_sql(IsoForest *model_outputs, ExtIsoForest *mo
 
     #pragma omp parallel for schedule(dynamic) num_threads(nthreads) \
             shared(model_outputs, model_outputs_ext, numeric_colnames, categ_colnames, categ_levels, \
-                   loop_st, loop_end, index1, single_tree, all_node_rules, out, ex) \
+                   loop_st, loop_end, index1, single_tree, all_node_rules, out, ex, threw_exception) \
             firstprivate(conditions_left, conditions_right) private(tree_use)
     for (size_t_for tree = loop_st; tree < loop_end; tree++)
     {
@@ -291,7 +295,7 @@ std::vector<std::string> generate_sql(IsoForest *model_outputs, ExtIsoForest *mo
             all_node_rules[tree_use].clear();
         }
 
-        catch(...)
+        catch (...)
         {
             #pragma omp critical
             {

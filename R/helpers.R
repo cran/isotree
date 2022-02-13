@@ -774,13 +774,14 @@ reconstruct.from.imp <- function(imputed_num, imputed_cat, data, model, pdata) {
 
 export.metadata <- function(model) {
     data_info <- list(
-        ncols_numeric  =  model$metadata$ncols_num, ## is in c++
-        ncols_categ    =  model$metadata$ncols_cat,  ## is in c++
-        cols_numeric   =  as.list(model$metadata$cols_num),
-        cols_categ     =  as.list(model$metadata$cols_cat),
-        cat_levels     =  unname(as.list(model$metadata$cat_levs)),
-        categ_cols     =  model$metadata$categ_cols,
-        categ_max      =  model$metadata$categ_max
+        ncols_numeric    =  model$metadata$ncols_num, ## is in c++
+        ncols_categ      =  model$metadata$ncols_cat,  ## is in c++
+        cols_numeric     =  as.list(model$metadata$cols_num),
+        cols_categ       =  as.list(model$metadata$cols_cat),
+        cat_levels       =  unname(as.list(model$metadata$cat_levs)),
+        categ_cols       =  model$metadata$categ_cols,
+        categ_max        =  model$metadata$categ_max,
+        reference_names  =  model$metadata$reference_names
     )
     
     if (NROW(data_info$cat_levels)) {
@@ -797,7 +798,8 @@ export.metadata <- function(model) {
     model_info <- list(
         ndim = model$params$ndim,
         nthreads = model$nthreads,
-        build_imputer = model$params$build_imputer
+        build_imputer = model$params$build_imputer,
+        use_long_double = coerce.null(model$use_long_double, FALSE)
     )
     
     params <- list(
@@ -808,6 +810,8 @@ export.metadata <- function(model) {
         ncols_per_tree = model$params$ncols_per_tree,
         prob_pick_avg_gain = model$params$prob_pick_avg_gain,
         prob_pick_pooled_gain = model$params$prob_pick_pooled_gain,
+        prob_pick_full_gain = model$params$prob_pick_full_gain,
+        prob_pick_dens = model$params$prob_pick_dens,
         prob_pick_col_by_range = model$params$prob_pick_col_by_range,
         min_gain = model$params$min_gain,
         missing_action = model$params$missing_action,  ## is in c++
@@ -841,6 +845,8 @@ take.metadata <- function(metadata) {
             ncols_per_tree = metadata$params$ncols_per_tree,
             prob_pick_avg_gain = metadata$params$prob_pick_avg_gain,
             prob_pick_pooled_gain = metadata$params$prob_pick_pooled_gain,
+            prob_pick_full_gain = metadata$params$prob_pick_full_gain,
+            prob_pick_dens = metadata$params$prob_pick_dens,
             prob_pick_col_by_range = metadata$params$prob_pick_col_by_range,
             prob_pick_col_by_var = metadata$params$prob_pick_col_by_var,
             prob_pick_col_by_kurt = metadata$params$prob_pick_col_by_kurt,
@@ -866,23 +872,29 @@ take.metadata <- function(metadata) {
             cols_cat   =  unlist(metadata$data_info$cols_categ),
             cat_levs   =  metadata$data_info$cat_levels,
             categ_cols =  metadata$data_info$categ_cols,
-            categ_max  =  metadata$data_info$categ_max
+            categ_max  =  metadata$data_info$categ_max,
+            reference_names = coerce.null(metadata$data_info$reference_names, character())
         ),
-        random_seed  =  metadata$params$random_seed,
-        nthreads     =  metadata$model_info$nthreads,
+        use_long_double  =  coerce.null(metadata$model_info$use_long_double, FALSE),
+        random_seed      =  metadata$params$random_seed,
+        nthreads         =  metadata$model_info$nthreads,
         cpp_obj      =  list(
             ptr         =  NULL,
             serialized  =  NULL,
             imp_ptr     =  NULL,
-            imp_ser     =  NULL
+            imp_ser     =  NULL,
+            indexer     =  NULL,
+            ind_ser     =  NULL
         )
     )
 
+    this$params$prob_pick_full_gain     <-  coerce.null(this$params$prob_pick_full_gain,    0.0)
+    this$params$prob_pick_dens          <-  coerce.null(this$params$prob_pick_dens,         0.0)
     this$params$prob_pick_col_by_range  <-  coerce.null(this$params$prob_pick_col_by_range, 0.0)
     this$params$prob_pick_col_by_var    <-  coerce.null(this$params$prob_pick_col_by_var,   0.0)
     this$params$prob_pick_col_by_kurt   <-  coerce.null(this$params$prob_pick_col_by_kurt,  0.0)
-    this$params$scoring_metric          <-  coerce.null(this$params$scoring_metric, "depth")
-    this$params$fast_bratio             <-  coerce.null(this$params$fast_bratio, TRUE)
+    this$params$scoring_metric          <-  coerce.null(this$params$scoring_metric,         "depth")
+    this$params$fast_bratio             <-  coerce.null(this$params$fast_bratio,            TRUE)
 
     if (!NROW(this$metadata$standardize_data))
         this$metadata$standardize_data <- TRUE

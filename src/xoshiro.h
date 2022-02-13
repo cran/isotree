@@ -14,9 +14,15 @@ See <http://creativecommons.org/publicdomain/zero/1.0/>. */
 #if (__cplusplus  >= 202002L)
 #include <bit>
 #endif
+using std::uint8_t;
 using std::uint32_t;
 using std::uint64_t;
 using std::memcpy;
+
+
+#if (__cplusplus >= 201703L) || (__cplusplus >= 201402L && (defined(__GNUC__) || defined(_MSC_VER)))
+    #define SUPPORTS_HEXFLOAT
+#endif
 
 namespace Xoshiro {
 
@@ -24,19 +30,16 @@ namespace Xoshiro {
 #define rotl64(x, k) std::rotl(x, k)
 #define rotl32(x, k) std::rotl(x, k)
 #else
-[[gnu::hot]]
-static inline uint64_t rotl64(const uint64_t x, const int k) {
+static inline uint64_t rotl64(const uint64_t x, const int k) noexcept {
     return (x << k) | (x >> (64 - k));
 }
-
-[[gnu::hot]]
-static inline uint32_t rotl32(const uint32_t x, const int k) {
+static inline uint32_t rotl32(const uint32_t x, const int k) noexcept {
     return (x << k) | (x >> (32 - k));
 }
 #endif
 
 /* these are in order to avoid gcc warnings about 'strict aliasing rules' */
-static inline uint32_t extract_32bits_from64_left(const uint64_t x)
+static inline uint32_t extract_32bits_from64_left(const uint64_t x) noexcept
 {
     uint32_t out;
     memcpy(reinterpret_cast<char*>(&out),
@@ -45,7 +48,7 @@ static inline uint32_t extract_32bits_from64_left(const uint64_t x)
     return out;
 }
 
-static inline uint32_t extract_32bits_from64_right(const uint64_t x)
+static inline uint32_t extract_32bits_from64_right(const uint64_t x) noexcept
 {
     uint32_t out;
     memcpy(reinterpret_cast<char*>(&out),
@@ -54,14 +57,14 @@ static inline uint32_t extract_32bits_from64_right(const uint64_t x)
     return out;
 }
 
-static inline void assign_32bits_to64_left(uint64_t &assign_to, const uint32_t take_from)
+static inline void assign_32bits_to64_left(uint64_t &assign_to, const uint32_t take_from) noexcept
 {
     memcpy(reinterpret_cast<char*>(&assign_to),
            reinterpret_cast<const char*>(&take_from),
            sizeof(uint32_t));
 }
 
-static inline void assign_32bits_to64_right(uint64_t &assign_to, const uint32_t take_from)
+static inline void assign_32bits_to64_right(uint64_t &assign_to, const uint32_t take_from) noexcept
 {
     memcpy(reinterpret_cast<char*>(&assign_to) + sizeof(uint32_t),
            reinterpret_cast<const char*>(&take_from),
@@ -74,8 +77,7 @@ static inline void assign_32bits_to64_right(uint64_t &assign_to, const uint32_t 
 
    It is a very fast generator passing BigCrush, and it can be useful if
    for some reason you absolutely want 64 bits of state. */
-[[gnu::hot]]
-static inline uint64_t splitmix64(const uint64_t seed)
+static inline uint64_t splitmix64(const uint64_t seed) noexcept
 {
     uint64_t z = (seed + 0x9e3779b97f4a7c15);
     z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9;
@@ -99,19 +101,19 @@ public:
     using result_type = uint64_t;
     uint64_t state[4];
 
-    constexpr static result_type min()
+    constexpr static result_type min() noexcept
     {
         return 0;
     }
 
-    constexpr static result_type max()
+    constexpr static result_type max() noexcept
     {
         return UINT64_MAX;
     }
 
-    Xoshiro256PP() = default;
+    Xoshiro256PP() noexcept = default;
 
-    inline void seed(const uint64_t seed)
+    inline void seed(const uint64_t seed) noexcept
     {
         this->state[0] = splitmix64(splitmix64(seed));
         this->state[1] = splitmix64(this->state[0]);
@@ -120,24 +122,23 @@ public:
     }
 
     template <class integer>
-    inline void seed(const integer seed)
+    inline void seed(const integer seed) noexcept
     {
         this->seed((uint64_t)seed);
     }
 
-    Xoshiro256PP(const uint64_t seed)
+    Xoshiro256PP(const uint64_t seed) noexcept
     {
         this->seed(seed);
     }
 
     template <class integer>
-    Xoshiro256PP(const integer seed)
+    Xoshiro256PP(const integer seed) noexcept
     {
         this->seed((uint64_t)seed);
     }
 
-    [[gnu::hot]]
-    inline result_type operator()()
+    inline result_type operator()() noexcept
     {
         const uint64_t result = rotl64(this->state[0] + this->state[3], 23) + this->state[0];
         const uint64_t t = this->state[1] << 17;
@@ -166,20 +167,20 @@ public:
     using result_type = uint32_t;
     uint32_t state[4];
 
-    constexpr static result_type min()
+    constexpr static result_type min() noexcept
     {
         return 0;
     }
 
-    constexpr static result_type max()
+    constexpr static result_type max() noexcept
     {
         return UINT32_MAX;
     }
 
-    Xoshiro128PP() = default;
+    Xoshiro128PP() noexcept = default;
 
 
-    inline void seed(const uint64_t seed)
+    inline void seed(const uint64_t seed) noexcept
     {
         const auto t1 = splitmix64(seed);
         const auto t2 = splitmix64(t1);
@@ -189,7 +190,7 @@ public:
         this->state[3] = extract_32bits_from64_right(t2);
     }
 
-    inline void seed(const uint32_t seed)
+    inline void seed(const uint32_t seed) noexcept
     {
         uint64_t temp;
         assign_32bits_to64_left(temp, seed);
@@ -199,29 +200,28 @@ public:
 
 
     template <class integer>
-    inline void seed(const integer seed)
+    inline void seed(const integer seed) noexcept
     {
         this->seed((uint64_t)seed);
     }
 
-    Xoshiro128PP(const uint32_t seed)
+    Xoshiro128PP(const uint32_t seed) noexcept
     {
         this->seed(seed);
     }
 
-    Xoshiro128PP(const uint64_t seed)
+    Xoshiro128PP(const uint64_t seed) noexcept
     {
         this->seed(seed);
     }
 
     template <class integer>
-    Xoshiro128PP(const integer seed)
+    Xoshiro128PP(const integer seed) noexcept
     {
         this->seed((uint64_t)seed);
     }
 
-    [[gnu::hot]]
-    inline result_type operator()()
+    inline result_type operator()() noexcept
     {
         const uint32_t result = rotl32(this->state[0] + this->state[3], 7) + this->state[0];
         const uint32_t t = this->state[1] << 9;
@@ -250,12 +250,14 @@ constexpr static const double ui64_d = (double)UINT64_MAX;
 constexpr static const double i64_d = (double)INT64_MAX;
 constexpr static const double twoPI = 2. * M_PI;
 
-static inline uint64_t gen_bits(Xoshiro256PP &rng)
+[[gnu::flatten, gnu::always_inline]]
+static inline uint64_t gen_bits(Xoshiro256PP &rng) noexcept
 {
     return rng();
 }
 
-static inline uint64_t gen_bits(Xoshiro128PP &rng)
+[[gnu::flatten, gnu::always_inline]]
+static inline uint64_t gen_bits(Xoshiro128PP &rng) noexcept
 {
     uint64_t bits;
     assign_32bits_to64_left(bits, rng());
@@ -269,7 +271,7 @@ static inline uint64_t gen_bits(Xoshiro128PP &rng)
    any further as GCC9 has a bug in which it optimizes away some 'if's'
    but with the *wrong* bit ending if done as ternary operators or if
    declaring pointer variables outside of the braces in what comes below. */
-static inline bool get_is_little_endian()
+static inline bool get_is_little_endian() noexcept
 {
     const uint32_t ONE = 1;
     return (*(reinterpret_cast<const unsigned char*>(&ONE)) != 0);
@@ -289,22 +291,22 @@ static const bool is_little_endian = get_is_little_endian();
 class UniformUnitInterval
 {
 public:
-    UniformUnitInterval() = default;
+    UniformUnitInterval() noexcept = default;
 
     template <class A, class B>
-    UniformUnitInterval(A a, B b) {}
+    UniformUnitInterval(A a, B b) noexcept {}
     
     template <class XoshiroRNG>
     #ifndef _FOR_R
-    [[gnu::hot, gnu::optimize("no-trapping-math"), gnu::optimize("no-math-errno")]]
+    [[gnu::optimize("no-trapping-math"), gnu::optimize("no-math-errno")]]
     #endif
-    double operator()(XoshiroRNG &rng)
+    double operator()(XoshiroRNG &rng) noexcept
     {
         #if SIZE_MAX >= UINT64_MAX
-        #   if (__cplusplus >= 201703L) || (__cplusplus >= 201402L && (defined(__GNUC__) || defined(_MSC_VER)))
-        return (double)(gen_bits(rng) & two53_i) * 0x1.0p-53;
+        #   ifdef SUPPORTS_HEXFLOAT
+        return (double)(gen_bits(rng) >> 11) * 0x1.0p-53;
         #   else
-        return std::ldexp(gen_bits(rng) & two53_i, -53);
+        return std::ldexp(gen_bits(rng) >> 11, -53);
         #   endif
         #else
         uint64_t bits = gen_bits(rng);
@@ -314,7 +316,7 @@ public:
         memcpy(&rbits, rbits_, sizeof(uint32_t));
         rbits = rbits & two21_i;
         memcpy(rbits_, &rbits, sizeof(uint32_t));
-        #   if (__cplusplus >= 201703L) || (__cplusplus >= 201402L && (defined(__GNUC__) || defined(_MSC_VER)))
+        #   ifdef SUPPORTS_HEXFLOAT
         return (double)bits * 0x1.0p-53;
         #   else
         return std::ldexp(bits, -53);
@@ -336,24 +338,24 @@ public:
 class UniformMinusOneToOne
 {
 public:
-    UniformMinusOneToOne() = default;
+    UniformMinusOneToOne() noexcept = default;
 
     template <class A, class B>
-    UniformMinusOneToOne(A a, B b) {}
+    UniformMinusOneToOne(A a, B b) noexcept {}
 
     template <class XoshiroRNG>
     #ifndef _FOR_R
-    [[gnu::hot, gnu::optimize("no-trapping-math"), gnu::optimize("no-math-errno")]]
+    [[gnu::optimize("no-trapping-math"), gnu::optimize("no-math-errno")]]
     #endif
-    double operator()(XoshiroRNG &rng)
+    double operator()(XoshiroRNG &rng) noexcept
     {
         #if SIZE_MAX >= UINT64_MAX
-        #   if (__cplusplus >= 201703L) || (__cplusplus >= 201402L && (defined(__GNUC__) || defined(_MSC_VER)))
-        double out = (double)((int64_t)(gen_bits(rng) & two54_i) - two53_ii) * 0x1.0p-53;
+        #   ifdef SUPPORTS_HEXFLOAT
+        double out = (double)((int64_t)(gen_bits(rng)  >> 10) - two53_ii) * 0x1.0p-53;
         #   else
-        double out = std::ldexp((int64_t)(gen_bits(rng) & two54_i) - two53_ii, -53);
+        double out = std::ldexp((int64_t)(gen_bits(rng) >> 10) - two53_ii, -53);
         #endif
-        if (out == 0) out = 1;
+        if (unlikely(out == 0)) out = 1;
         return out;
         #else
         uint64_t bits = gen_bits(rng);
@@ -363,93 +365,90 @@ public:
         memcpy(&rbits, rbits_, sizeof(uint32_t));
         rbits = rbits & two22_i;
         memcpy(rbits_, &rbits, sizeof(uint32_t));
-        #   if (__cplusplus >= 201703L) || (__cplusplus >= 201402L && (defined(__GNUC__) || defined(_MSC_VER)))
+        #   ifdef SUPPORTS_HEXFLOAT
         double out = (double)((int64_t)bits - two53_ii) * 0x1.0p-53;
         #   else
         double out = std::ldexp((int64_t)bits - two53_ii, -53);
         #endif
-        if (out == 0) out = 1;
+        if (unlikely(out == 0)) out = 1;
         return out;
         #endif
     }
 };
 
-/* Normal distribution using Box-Muller transform in raw form.
-   This usually gives better results than the polar form, but
-   it's slightly slower. Note that it requires drawing random
-   uniform numbers in an open interval rather than half open.
-
-   About the math:
-   - It produces a uniform number [0,2^64-1]
-   - Ignores the first 12 bits, setting it to [0,2^52-1]
-   - Adds +0.5, leaving [2^-1, 2^52-2^-1]
-   - Divides by 2^52, leaving [2^-53, 1-2^-53]
-   Which is how it reaches an unbiased open uniform distribution. */
+/* Normal distribution sampled from uniform numbers using ziggurat method. */
+#include "ziggurat.h"
 class StandardNormalDistr
 {
 public:
-    double reserve;
-    double has_reserve = false;
-
-    StandardNormalDistr() = default;
+    StandardNormalDistr() noexcept = default;
 
     template <class A, class B>
-    StandardNormalDistr(A a, B b) : has_reserve(false) {}
+    StandardNormalDistr(A a, B b) noexcept {}
 
     template <class XoshiroRNG>
     #ifndef _FOR_R
-    [[gnu::hot, gnu::optimize("no-trapping-math"), gnu::optimize("no-math-errno")]]
+    [[gnu::optimize("no-trapping-math"), gnu::optimize("no-math-errno")]]
     #endif
-    double operator()(XoshiroRNG &rng)
+    double operator()(XoshiroRNG &rng) noexcept
     {
-        double res;
-        if (has_reserve) {
-            res = this->reserve;
+        repeat_draw:
+        uint64_t rnd = gen_bits(rng);
+        uint8_t rectangle = rnd & 255; /* <- number of rectangles (took 8 bits) */
+        rnd >>= 8;
+        uint8_t sign = rnd & 1; /* <- took 1 bit */
+        /* there's currently 56 bits left, already used 1 for the sign, need to
+           take 52 for for the uniform draw, so can chop off 3 more than what
+           was taken to get there faster. */
+        rnd >>= 4;
+        double rnorm = rnd * wi_double[rectangle];
+        if (likely(rnd < ki_double[rectangle]))
+        {
+            return sign? rnorm : -rnorm;
         }
-        
-        else {
-            #if SIZE_MAX >= UINT64_MAX
-            #   if (__cplusplus >= 201703L) || (__cplusplus >= 201402L && (defined(__GNUC__) || defined(_MSC_VER)))
-            double rnd1 = ((double)(gen_bits(rng) & two52i) + 0.5) * 0x1.0p-52;
-            double rnd2 = ((double)(gen_bits(rng) & two52i) + 0.5) * 0x1.0p-52;
-            #   else
-            double rnd1 = std::ldexp(((double)(gen_bits(rng) & two52i) + 0.5), -52);
-            double rnd2 = std::ldexp(((double)(gen_bits(rng) & two52i) + 0.5), -52);
-            #   endif
-            #else
-            double rnd1, rnd2;
-            uint64_t bits1 = gen_bits(rng);
-            uint64_t bits2 = gen_bits(rng);
-            char *rbits1_ = reinterpret_cast<char*>(&bits1);
-            char *rbits2_ = reinterpret_cast<char*>(&bits2);
-            if (is_little_endian) {
-                rbits1_ += sizeof(uint32_t);
-                rbits2_ += sizeof(uint32_t);
+
+        else
+        {
+            if (likely(rectangle != 0))
+            {
+                rnd = gen_bits(rng);
+                #ifdef SUPPORTS_HEXFLOAT
+                double runif = ((double)(rnd  >> 12) + 0.5) * 0x1.0p-52;
+                #else
+                double runif = ((double)(rnd >> 12) + 0.5);
+                runif = std::ldexp(runif, -52);
+                #endif
+                if (runif * (fi_double[rectangle-1] - fi_double[rectangle])
+                        <
+                    std::exp(-0.5 * rnorm * rnorm) - fi_double[rectangle])
+                {
+                    return sign? rnorm : -rnorm;
+                }
+                goto repeat_draw;
             }
-            uint32_t rbits1, rbits2;
-            memcpy(&rbits1, rbits1_, sizeof(uint32_t));
-            rbits1 = rbits1 & two20_i;
-            memcpy(rbits1_, &rbits1, sizeof(uint32_t));
-            memcpy(&rbits2, rbits2_, sizeof(uint32_t));
-            rbits2 = rbits2 & two20_i;
-            memcpy(rbits2_, &rbits2, sizeof(uint32_t));
-            #   if (__cplusplus >= 201703L) || (__cplusplus >= 201402L && (defined(__GNUC__) || defined(_MSC_VER)))
-            rnd1 = ((double)bits1 + 0.5) * 0x1.0p-52;
-            rnd2 = ((double)bits2 + 0.5) * 0x1.0p-52;
-            #   else
-            rnd1 = std::ldexp((double)bits1 + 0.5, -52);
-            rnd2 = std::ldexp((double)bits2 + 0.5, -52);
-            #   endif
-            #endif
 
-            rnd1 = std::sqrt(-2. * std::log(rnd1));
-            res = std::cos(twoPI * rnd2) * rnd1;
-            this->reserve = std::sin(twoPI * rnd2) * rnd1;
+            else
+            {
+                double runif, runif2;
+                double a_by_d;
+                while (true)
+                {
+                    #ifdef SUPPORTS_HEXFLOAT
+                    runif = ((double)(gen_bits(rng) >> 12) + 0.5) * 0x1.0p-52;
+                    runif2 = ((double)(gen_bits(rng) >> 12) + 0.5) * 0x1.0p-52;
+                    #else
+                    runif = std::ldexp((double)(gen_bits(rng) >> 12) + 0.5, -52);
+                    runif2 = std::ldexp((double)(gen_bits(rng) >> 12) + 0.5, -52);
+                    #endif
+                    a_by_d = -ziggurat_nor_inv_r * std::log(runif);
+                    if (-2.0 * std::log(runif2) > a_by_d * a_by_d)
+                    {
+                        rnorm = ziggurat_nor_r + a_by_d;
+                        return sign? rnorm : -rnorm;
+                    }
+                }
+            }
         }
-
-        this->has_reserve = !this->has_reserve;
-        if (!res) return this->operator()(rng);
-        return res;
     }
 };
 

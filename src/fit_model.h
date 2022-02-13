@@ -34,6 +34,10 @@
 *     [13] Cortes, David.
 *          "Isolation forests: looking beyond tree depth."
 *          arXiv preprint arXiv:2111.11639 (2021).
+*     [14] Ting, Kai Ming, Yue Zhu, and Zhi-Hua Zhou.
+*          "Isolation kernel and its effect on SVM"
+*          Proceedings of the 24th ACM SIGKDD
+*          International Conference on Knowledge Discovery & Data Mining. 2018.
 * 
 *     BSD 2-Clause License
 *     Copyright (c) 2019-2022, David Cortes
@@ -110,11 +114,11 @@
 *       the single-variable model. Note that the model object pointer passed must also
 *       agree with the value passed to 'ndim'.
 * - ntry
-*       When using 'prob_pick_pooled_gain' and/or 'prob_pick_avg_gain', how many variables (with 'ndim=1')
+*       When using any of 'prob_pick_by_gain_pl', 'prob_pick_by_gain_avg', 'prob_pick_by_full_gain', 'prob_pick_by_dens', how many variables (with 'ndim=1')
 *       or linear combinations (with 'ndim>1') to try for determining the best one according to gain.
-*       Recommended value in reference [4] is 10 (with 'prob_pick_avg_gain', for outlier detection), while the
-*       recommended value in reference [11] is 1 (with 'prob_pick_pooled_gain', for outlier detection), and the
-*       recommended value in reference [9] is 10 to 20 (with 'prob_pick_pooled_gain', for missing value imputations).
+*       Recommended value in reference [4] is 10 (with 'prob_pick_by_gain_avg', for outlier detection), while the
+*       recommended value in reference [11] is 1 (with 'prob_pick_by_gain_pl', for outlier detection), and the
+*       recommended value in reference [9] is 10 to 20 (with 'prob_pick_by_gain_pl', for missing value imputations).
 * - coef_type
 *       For the extended model, whether to sample random coefficients according to a normal distribution ~ N(0, 1)
 *       (as proposed in [4]) or according to a uniform distribution ~ Unif(-1, +1) as proposed in [3]. Ignored for the
@@ -151,7 +155,7 @@
 *       Models that use 'prob_pick_by_gain_pl' or 'prob_pick_by_gain_avg' are likely to benefit from
 *       deeper trees (larger 'max_depth'), but deeper trees can result in much slower model fitting and
 *       predictions.
-*       Note that models that use 'prob_pick_pooled_gain' or 'prob_pick_avg_gain' are likely to benefit from
+*       Note that models that use 'prob_pick_by_gain_pl' or 'prob_pick_by_gain_avg' are likely to benefit from
 *       deeper trees (larger 'max_depth'), but deeper trees can result in much slower model fitting and
 *       predictions.
 *       If using pooled gain, one might want to substitute 'max_depth' with 'min_gain'.
@@ -174,7 +178,7 @@
 *       reasonable range in the data being split (given by 2 * range in data and centered around the split point),
 *       as proposed in [4] and implemented in the authors' original code in [5]. Not used in single-variable model
 *       when splitting by categorical variables. Note that this can make a very large difference in the results
-*       when using 'prob_pick_pooled_gain'.
+*       when using 'prob_pick_by_gain_pl'.
 *       This option is not supported when using density-based outlier scoring metrics.
 * - standardize_data
 *       Whether to standardize the features at each node before creating a linear combination of them as suggested
@@ -337,18 +341,18 @@
 *       When used for outlier detection, datasets with multimodal distributions usually see better performance
 *       under this type of splits.
 *       Note that, since this makes the trees more even and thus it takes more steps to produce isolated nodes,
-*       the resulting object will be heavier. When splits are not made according to any of 'prob_pick_avg_gain'
-*       or 'prob_pick_pooled_gain', both the column and the split point are decided at random. Note that, if
-*       passing value 1 (100%) with no sub-sampling and using the single-variable model,
+*       the resulting object will be heavier. When splits are not made according to any of 'prob_pick_by_gain_avg',
+*       'prob_pick_by_gain_pl', 'prob_pick_by_full_gain', 'prob_pick_by_dens', both the column and the split point are decided at random.
+*       Note that, if passing value 1 (100%) with no sub-sampling and using the single-variable model,
 *       every single tree will have the exact same splits.
-*       Be aware that 'penalize_range' can also have a large impact when using 'prob_pick_pooled_gain'.
+*       Be aware that 'penalize_range' can also have a large impact when using 'prob_pick_by_gain_pl'.
 *       Be aware also that, if passing a value of 1 (100%) with no sub-sampling and using the single-variable
 *       model, every single tree will have the exact same splits.
 *       Under this option, models are likely to produce better results when increasing 'max_depth'.
 *       Alternatively, one can also control the depth through 'min_gain' (for which one might want to
 *       set 'max_depth=0').
-*       Important detail: if using either 'prob_pick_avg_gain' or 'prob_pick_pooled_gain', the distribution of
-*       outlier scores is unlikely to be centered around 0.5.
+*       Important detail: if using any of 'prob_pick_by_gain_avg', 'prob_pick_by_gain_pl', 'prob_pick_by_full_gain',
+*       'prob_pick_by_dens', the distribution of outlier scores is unlikely to be centered around 0.5.
 * - prob_pick_by_gain_avg
 *       This parameter indicates the probability of choosing the threshold on which to split a variable
 *       (with 'ndim=1') or a linear combination of variables (when using 'ndim>1') as the threshold
@@ -365,16 +369,42 @@
 *       of split. Recommended to use sub-samples (parameter 'sample_size') when
 *       passing this parameter. Note that, since this will create isolated nodes faster, the resulting object
 *       will be lighter (use less memory).
-*       When splits are not made according to any of 'prob_pick_avg_gain' or 'prob_pick_pooled_gain',
-*       both the column and the split point are decided at random. Default setting for [1], [2], [3] is
-*       zero, and default for [4] is 1. This is the randomization parameter that can be passed to the author's original code in [5],
+*       When splits are not made according to any of 'prob_pick_by_gain_avg', 'prob_pick_by_gain_pl',
+*       'prob_pick_by_full_gain', 'prob_pick_by_dens', both the column and the split point are decided at random.
+*       Default setting for [1], [2], [3] is zero, and default for [4] is 1.
+*       This is the randomization parameter that can be passed to the author's original code in [5],
 *       but note that the code in [5] suffers from a mathematical error in the calculation of running standard deviations,
 *       so the results from it might not match with this library's.
-*       Be aware that, if passing a value of 1 (100%) with no sub-sampling and using the single-variable model, every single tree will have
-*       the exact same splits.
+*       Be aware that, if passing a value of 1 (100%) with no sub-sampling and using the single-variable model,
+*       every single tree will have the exact same splits.
 *       Under this option, models are likely to produce better results when increasing 'max_depth'.
-*       Important detail: if using either 'prob_pick_avg_gain' or 'prob_pick_pooled_gain', the distribution of
-*       outlier scores is unlikely to be centered around 0.5.
+*       Important detail: if using any of 'prob_pick_by_gain_avg', 'prob_pick_by_gain_pl',
+*       'prob_pick_by_full_gain', 'prob_pick_by_dens', the distribution of outlier scores is unlikely to be centered around 0.5.
+* - prob_pick_by_full_gain
+*       This parameter indicates the probability of choosing the threshold on which to split a variable
+*       (with 'ndim=1') or a linear combination of variables (when using 'ndim>1') as the threshold
+*       that minimizes the pooled sums of variances of all columns (or a subset of them if using
+*       'ncols_per_tree').
+*       In general, 'prob_pick_by_full_gain' is much slower to evaluate than the other gain types, and does not tend to
+*       lead to better results. When using 'prob_pick_by_full_gain', one might want to use a different scoring
+*       metric (particulatly 'Density', 'BoxedDensity2' or 'BoxedRatio'). Note that
+*       the variance calculations are all done through the (exact) sorted-indices approach, while is much
+*       slower than the (approximate) histogram approach used by other decision tree software.
+*       Be aware that the data is not standardized in any way for the range calculations, thus the scales
+*       of features will make a large difference under 'prob_pick_by_full_gain', which might not make it suitable for
+*       all types of data.
+*       'prob_pick_by_full_gain' is not compatible with categorical data, and 'min_gain' does not apply to it.
+*       When splits are not made according to any of 'prob_pick_by_gain_avg', 'prob_pick_by_gain_pl',
+*       'prob_pick_by_full_gain', 'prob_pick_by_dens', both the column and the split point are decided at random.
+*       Default setting for [1], [2], [3], [4] is zero.
+* - prob_pick_dens
+*       This parameter indicates the probability of choosing the threshold on which to split a variable
+*       (with 'ndim=1') or a linear combination of variables (when using 'ndim>1') as the threshold
+*       that maximizes the pooled densities of the branch distributions.
+*       The 'min_gain' option does not apply to this type of splits.
+*       When splits are not made according to any of 'prob_pick_by_gain_avg', 'prob_pick_by_gain_pl',
+*       'prob_pick_by_full_gain', 'prob_pick_by_dens', both the column and the split point are decided at random.
+*       Default setting for [1], [2], [3], [4] is zero.
 * - prob_pick_col_by_range
 *       When using 'ndim=1', this denotes the probability of choosing the column to split with a probability
 *       proportional to the range spanned by each column within a node as proposed in reference [12].
@@ -431,9 +461,11 @@
 *       the same central value).
 *       Be aware that kurtosis can be a rather slow metric to calculate.
 * - min_gain
-*       Minimum gain that a split threshold needs to produce in order to proceed with a split. Only used when the splits
-*       are decided by a gain criterion (either pooled or averaged). If the highest possible gain in the evaluated
-*       splits at a node is below this  threshold, that node becomes a terminal node.
+*       Minimum gain that a split threshold needs to produce in order to proceed with a split.
+*       Only used when the splits are decided by a variance gain criterion ('prob_pick_by_gain_pl' or
+*       'prob_pick_by_gain_avg', but not 'prob_pick_by_full_gain' nor 'prob_pick_by_dens').
+*       If the highest possible gain in the evaluated splits at a node is below this  threshold,
+*       that node becomes a terminal node.
 *       This can be used as a more sophisticated depth control when using pooled gain (note that 'max_depth'
 *       still applies on top of this heuristic).
 * - missing_action
@@ -509,6 +541,18 @@
 *       'categ_data', and 'Xc', will get overwritten with the imputations produced.
 * - random_seed
 *       Seed that will be used to generate random numbers used by the model.
+* - use_long_double
+*       Whether to use 'long double' (extended precision) type for more precise calculations about
+*       standard deviations, means, ratios, weights, gain, and other potential aggregates. This makes
+*       such calculations accurate to a larger number of decimals (provided that the compiler used has
+*       wider long doubles than doubles) and it is highly recommended to use when the input data has
+*       a number of rows or columns exceeding 2^53 (an unlikely scenario), and also highly recommended
+*       to use when the input data has problematic scales (e.g. numbers that differ from each other by
+*       something like 10^-100 or columns that include values like 10^100 and 10^-100 and still need to
+*       be sensitive to a difference of 10^-100), but will make the calculations slower, the more so in
+*       platforms in which 'long double' is a software-emulated type (e.g. Power8 platforms).
+*       Note that some platforms (most notably windows with the msvc compiler) do not make any difference
+*       between 'double' and 'long double'.
 * - nthreads
 *       Number of parallel threads to use. Note that, the more threads, the more memory will be
 *       allocated, even if the thread does not end up being used.
@@ -527,28 +571,94 @@
 * what these values correspond to, you can use the functions
 * 'return_EXIT_SUCESS' and 'return_EXIT_FAILURE', which will return them
 * as integers.
-* 
-* References
-* ==========
-* [1] Liu, Fei Tony, Kai Ming Ting, and Zhi-Hua Zhou.
-*     "Isolation forest."
-*     2008 Eighth IEEE International Conference on Data Mining. IEEE, 2008.
-* [2] Liu, Fei Tony, Kai Ming Ting, and Zhi-Hua Zhou.
-*     "Isolation-based anomaly detection."
-*     ACM Transactions on Knowledge Discovery from Data (TKDD) 6.1 (2012): 3.
-* [3] Hariri, Sahand, Matias Carrasco Kind, and Robert J. Brunner.
-*     "Extended Isolation Forest."
-*     arXiv preprint arXiv:1811.02141 (2018).
-* [4] Liu, Fei Tony, Kai Ming Ting, and Zhi-Hua Zhou.
-*     "On detecting clustered anomalies using SCiForest."
-*     Joint European Conference on Machine Learning and Knowledge Discovery in Databases. Springer, Berlin, Heidelberg, 2010.
-* [5] https://sourceforge.net/projects/iforest/
-* [6] https://math.stackexchange.com/questions/3388518/expected-number-of-paths-required-to-separate-elements-in-a-binary-tree
-* [7] Quinlan, J. Ross. C4. 5: programs for machine learning. Elsevier, 2014.
-* [8] Cortes, David. "Distance approximation using Isolation Forests." arXiv preprint arXiv:1910.12362 (2019).
 */
 template <class real_t, class sparse_ix>
 int fit_iforest(IsoForest *model_outputs, ExtIsoForest *model_outputs_ext,
+                real_t numeric_data[],  size_t ncols_numeric,
+                int    categ_data[],    size_t ncols_categ,    int ncat[],
+                real_t Xc[], sparse_ix Xc_ind[], sparse_ix Xc_indptr[],
+                size_t ndim, size_t ntry, CoefType coef_type, bool coef_by_prop,
+                real_t sample_weights[], bool with_replacement, bool weight_as_sample,
+                size_t nrows, size_t sample_size, size_t ntrees,
+                size_t max_depth,   size_t ncols_per_tree,
+                bool   limit_depth, bool penalize_range, bool standardize_data,
+                ScoringMetric scoring_metric, bool fast_bratio,
+                bool   standardize_dist, double tmat[],
+                double output_depths[], bool standardize_depth,
+                real_t col_weights[], bool weigh_by_kurt,
+                double prob_pick_by_gain_pl, double prob_pick_by_gain_avg,
+                double prob_pick_by_full_gain, double prob_pick_by_dens,
+                double prob_pick_col_by_range, double prob_pick_col_by_var,
+                double prob_pick_col_by_kurt,
+                double min_gain, MissingAction missing_action,
+                CategSplit cat_split_type, NewCategAction new_cat_action,
+                bool   all_perm, Imputer *imputer, size_t min_imp_obs,
+                UseDepthImp depth_imp, WeighImpRows weigh_imp_rows, bool impute_at_fit,
+                uint64_t random_seed, bool use_long_double, int nthreads)
+{
+    if (use_long_double && !has_long_double()) {
+        use_long_double = false;
+        fprintf(stderr, "Passed 'use_long_double=true', but library was compiled without long double support.\n");
+    }
+    #ifndef NO_LONG_DOUBLE
+    if (likely(!use_long_double))
+    #endif
+        return fit_iforest_internal<real_t, sparse_ix, double>(
+            model_outputs, model_outputs_ext,
+            numeric_data,  ncols_numeric,
+            categ_data,    ncols_categ,    ncat,
+            Xc, Xc_ind, Xc_indptr,
+            ndim, ntry, coef_type, coef_by_prop,
+            sample_weights, with_replacement, weight_as_sample,
+            nrows, sample_size, ntrees,
+            max_depth, ncols_per_tree,
+            limit_depth, penalize_range, standardize_data,
+            scoring_metric, fast_bratio,
+            standardize_dist, tmat,
+            output_depths, standardize_depth,
+            col_weights, weigh_by_kurt,
+            prob_pick_by_gain_pl, prob_pick_by_gain_avg,
+            prob_pick_by_full_gain, prob_pick_by_dens,
+            prob_pick_col_by_range, prob_pick_col_by_var,
+            prob_pick_col_by_kurt,
+            min_gain, missing_action,
+            cat_split_type, new_cat_action,
+            all_perm, imputer, min_imp_obs,
+            depth_imp, weigh_imp_rows, impute_at_fit,
+            random_seed, nthreads
+        );
+    #ifndef NO_LONG_DOUBLE
+    else
+        return fit_iforest_internal<real_t, sparse_ix, long double>(
+            model_outputs, model_outputs_ext,
+            numeric_data,  ncols_numeric,
+            categ_data,    ncols_categ,    ncat,
+            Xc, Xc_ind, Xc_indptr,
+            ndim, ntry, coef_type, coef_by_prop,
+            sample_weights, with_replacement, weight_as_sample,
+            nrows, sample_size, ntrees,
+            max_depth, ncols_per_tree,
+            limit_depth, penalize_range, standardize_data,
+            scoring_metric, fast_bratio,
+            standardize_dist, tmat,
+            output_depths, standardize_depth,
+            col_weights, weigh_by_kurt,
+            prob_pick_by_gain_pl, prob_pick_by_gain_avg,
+            prob_pick_by_full_gain, prob_pick_by_dens,
+            prob_pick_col_by_range, prob_pick_col_by_var,
+            prob_pick_col_by_kurt,
+            min_gain, missing_action,
+            cat_split_type, new_cat_action,
+            all_perm, imputer, min_imp_obs,
+            depth_imp, weigh_imp_rows, impute_at_fit,
+            random_seed, nthreads
+        );
+    #endif
+}
+
+template <class real_t, class sparse_ix, class ldouble_safe>
+int fit_iforest_internal(
+                IsoForest *model_outputs, ExtIsoForest *model_outputs_ext,
                 real_t numeric_data[],  size_t ncols_numeric,
                 int    categ_data[],    size_t ncols_categ,    int ncat[],
                 real_t Xc[], sparse_ix Xc_ind[], sparse_ix Xc_indptr[],
@@ -562,6 +672,7 @@ int fit_iforest(IsoForest *model_outputs, ExtIsoForest *model_outputs_ext,
                 double output_depths[], bool standardize_depth,
                 real_t col_weights[], bool weigh_by_kurt,
                 double prob_pick_by_gain_pl, double prob_pick_by_gain_avg,
+                double prob_pick_by_full_gain, double prob_pick_by_dens,
                 double prob_pick_col_by_range, double prob_pick_col_by_var,
                 double prob_pick_col_by_kurt,
                 double min_gain, MissingAction missing_action,
@@ -571,13 +682,17 @@ int fit_iforest(IsoForest *model_outputs, ExtIsoForest *model_outputs_ext,
                 uint64_t random_seed, int nthreads)
 {
     if (
-        prob_pick_by_gain_avg < 0 || prob_pick_by_gain_pl < 0 || prob_pick_col_by_range < 0 ||
-        prob_pick_col_by_var < 0 || prob_pick_col_by_kurt < 0
+        prob_pick_by_gain_avg  < 0 || prob_pick_by_gain_pl  < 0 ||
+        prob_pick_by_full_gain < 0 || prob_pick_by_dens     < 0 ||
+        prob_pick_col_by_range < 0 ||
+        prob_pick_col_by_var   < 0 || prob_pick_col_by_kurt < 0
     ) {
         throw std::runtime_error("Cannot pass negative probabilities.\n");
     }
-    if (prob_pick_col_by_range && categ_data != NULL)
+    if (prob_pick_col_by_range && ncols_categ)
         throw std::runtime_error("'prob_pick_col_by_range' is not compatible with categorical data.\n");
+    if (prob_pick_by_full_gain && ncols_categ)
+        throw std::runtime_error("'prob_pick_by_full_gain' is not compatible with categorical data.\n");
     if (prob_pick_col_by_kurt && weigh_by_kurt)
         throw std::runtime_error("'weigh_by_kurt' and 'prob_pick_col_by_kurt' cannot be used together.\n");
     if (ndim == 0 && model_outputs == NULL)
@@ -596,11 +711,20 @@ int fit_iforest(IsoForest *model_outputs, ExtIsoForest *model_outputs_ext,
         if (impute_at_fit)
             throw std::runtime_error("Cannot impute at fit time when sampling with replacement.\n");
     }
+    if (sample_size != 0 && sample_size < nrows) {
+        if (output_depths != NULL)
+            throw std::runtime_error("Cannot produce outlier scores at fit time when using sub-sampling.\n");
+        if (tmat != NULL)
+            throw std::runtime_error("Cannot calculate distances at fit time when using sub-sampling.\n");
+        if (impute_at_fit)
+            throw std::runtime_error("Cannot produce missing data imputations at fit time when using sub-sampling.\n");
+    }
 
 
     /* TODO: this function should also accept the array as a memoryview with a
        leading dimension that might not correspond to the number of columns,
-       so as to avoid having to make deep copies of memoryviews in python. */
+       so as to avoid having to make deep copies of memoryviews in python and to
+       allow using pointers to columns of dataframes in R and Python. */
 
     /* calculate maximum number of categories to use later */
     int max_categ = 0;
@@ -609,7 +733,7 @@ int fit_iforest(IsoForest *model_outputs, ExtIsoForest *model_outputs_ext,
 
     bool calc_dist = tmat != NULL;
 
-    if (calc_dist || sample_size == 0)
+    if (sample_size == 0)
         sample_size = nrows;
 
     if (model_outputs != NULL)
@@ -626,11 +750,14 @@ int fit_iforest(IsoForest *model_outputs, ExtIsoForest *model_outputs_ext,
                                 Xc, Xc_ind, Xc_indptr,
                                 0, 0, std::vector<double>(),
                                 std::vector<char>(), 0, NULL,
-                                (double*)NULL, (double*)NULL, (int*)NULL, std::vector<double>()};
+                                (double*)NULL, (double*)NULL, (int*)NULL, std::vector<double>(),
+                                std::vector<double>(), std::vector<double>(),
+                                std::vector<size_t>(), std::vector<size_t>()};
     ModelParams model_params = {with_replacement, sample_size, ntrees, ncols_per_tree,
                                 limit_depth? log2ceil(sample_size) : max_depth? max_depth : (sample_size - 1),
                                 penalize_range, standardize_data, random_seed, weigh_by_kurt,
                                 prob_pick_by_gain_avg, prob_pick_by_gain_pl,
+                                prob_pick_by_full_gain, prob_pick_by_dens,
                                 prob_pick_col_by_range, prob_pick_col_by_var,
                                 prob_pick_col_by_kurt,
                                 min_gain, cat_split_type, new_cat_action, missing_action,
@@ -638,6 +765,17 @@ int fit_iforest(IsoForest *model_outputs, ExtIsoForest *model_outputs_ext,
                                 (model_outputs != NULL)? 0 : ndim, ntry,
                                 coef_type, coef_by_prop, calc_dist, (bool)(output_depths != NULL), impute_at_fit,
                                 depth_imp, weigh_imp_rows, min_imp_obs};
+
+    /* if calculating full gain, need to produce copies of the data in row-major order */
+    if (prob_pick_by_full_gain)
+    {
+        if (input_data.Xc_indptr == NULL)
+            colmajor_to_rowmajor(input_data.numeric_data, input_data.nrows, input_data.ncols_numeric, input_data.X_row_major);
+        else
+            colmajor_to_rowmajor(input_data.Xc, input_data.Xc_ind, input_data.Xc_indptr,
+                                 input_data.nrows, input_data.ncols_numeric,
+                                 input_data.Xr, input_data.Xr_ind, input_data.Xr_indptr);
+    }
 
     /* if using weights as sampling probability, build a binary tree for faster sampling */
     if (input_data.weight_as_sample && input_data.sample_weights != NULL)
@@ -648,7 +786,7 @@ int fit_iforest(IsoForest *model_outputs, ExtIsoForest *model_outputs_ext,
 
     /* same for column weights */
     /* TODO: this should also save the kurtoses when using 'prob_pick_col_by_kurt' */
-    ColumnSampler base_col_sampler;
+    ColumnSampler<ldouble_safe> base_col_sampler;
     if (
         col_weights != NULL ||
         (model_params.weigh_by_kurt && model_params.sample_size == input_data.nrows && !model_params.with_replacement &&
@@ -656,7 +794,8 @@ int fit_iforest(IsoForest *model_outputs, ExtIsoForest *model_outputs_ext,
     )
     {
         bool avoid_col_weights = (model_outputs != NULL && model_params.ntry >= model_params.ncols_per_tree &&
-                                  model_params.prob_pick_by_gain_avg + model_params.prob_pick_by_gain_pl >= 1)
+                                  model_params.prob_pick_by_gain_avg  + model_params.prob_pick_by_gain_pl +
+                                  model_params.prob_pick_by_full_gain + model_params.prob_pick_by_dens >= 1)
                                     ||
                                  (model_outputs == NULL && model_params.ndim >= model_params.ncols_per_tree)
                                     ||
@@ -666,7 +805,7 @@ int fit_iforest(IsoForest *model_outputs, ExtIsoForest *model_outputs_ext,
             if (model_params.weigh_by_kurt && model_params.sample_size == input_data.nrows && !model_params.with_replacement)
             {
                 RNG_engine rnd_generator(random_seed);
-                std::vector<double> kurt_weights = calc_kurtosis_all_data(input_data, model_params, rnd_generator);
+                std::vector<double> kurt_weights = calc_kurtosis_all_data<InputData<real_t, sparse_ix>, ldouble_safe>(input_data, model_params, rnd_generator);
                 if (col_weights != NULL)
                 {
                     for (size_t col = 0; col < input_data.ncols_tot; col++)
@@ -792,8 +931,8 @@ int fit_iforest(IsoForest *model_outputs, ExtIsoForest *model_outputs_ext,
     }
 
     /* if imputing missing values on-the-fly, need to determine which are missing */
-    std::vector<ImputedData<sparse_ix>> impute_vec;
-    hashed_map<size_t, ImputedData<sparse_ix>> impute_map;
+    std::vector<ImputedData<sparse_ix, ldouble_safe>> impute_vec;
+    hashed_map<size_t, ImputedData<sparse_ix, ldouble_safe>> impute_map;
     if (model_params.impute_at_fit)
         check_for_missing(input_data, impute_vec, impute_map, nthreads);
 
@@ -812,10 +951,10 @@ int fit_iforest(IsoForest *model_outputs, ExtIsoForest *model_outputs_ext,
             model_outputs->scoring_metric != BoxedDensity2 &&
             model_outputs->scoring_metric != BoxedRatio
         )
-            model_outputs->exp_avg_depth  = expected_avg_depth(sample_size);
+            model_outputs->exp_avg_depth  = expected_avg_depth<ldouble_safe>(sample_size);
         else
             model_outputs->exp_avg_depth  = 1;
-        model_outputs->exp_avg_sep = expected_separation_depth(model_params.sample_size);
+        model_outputs->exp_avg_sep = expected_separation_depth<ldouble_safe>(model_params.sample_size);
         model_outputs->orig_sample_size = input_data.nrows;
         model_outputs->has_range_penalty = penalize_range;
     }
@@ -834,24 +973,26 @@ int fit_iforest(IsoForest *model_outputs, ExtIsoForest *model_outputs_ext,
             model_outputs_ext->scoring_metric != BoxedDensity2 &&
             model_outputs_ext->scoring_metric != BoxedRatio
         )
-            model_outputs_ext->exp_avg_depth  = expected_avg_depth(sample_size);
+            model_outputs_ext->exp_avg_depth  = expected_avg_depth<ldouble_safe>(sample_size);
         else
             model_outputs_ext->exp_avg_depth  = 1;
-        model_outputs_ext->exp_avg_sep = expected_separation_depth(model_params.sample_size);
+        model_outputs_ext->exp_avg_sep = expected_separation_depth<ldouble_safe>(model_params.sample_size);
         model_outputs_ext->orig_sample_size = input_data.nrows;
         model_outputs_ext->has_range_penalty = penalize_range;
     }
 
     if (imputer != NULL)
-        initialize_imputer(*imputer, input_data, ntrees, nthreads);
+        initialize_imputer<decltype(input_data), ldouble_safe>(
+            *imputer, input_data, ntrees, nthreads
+        );
 
     /* initialize thread-private memory */
     if ((size_t)nthreads > ntrees)
         nthreads = (int)ntrees;
     #ifdef _OPENMP
-        std::vector<WorkerMemory<ImputedData<sparse_ix>>> worker_memory(nthreads);
+        std::vector<WorkerMemory<ImputedData<sparse_ix, ldouble_safe>, ldouble_safe, real_t>> worker_memory(nthreads);
     #else
-        std::vector<WorkerMemory<ImputedData<sparse_ix>>> worker_memory(1);
+        std::vector<WorkerMemory<ImputedData<sparse_ix, ldouble_safe>, ldouble_safe, real_t>> worker_memory(1);
     #endif
 
     /* Global variable that determines if the procedure receives a stop signal */
@@ -862,7 +1003,7 @@ int fit_iforest(IsoForest *model_outputs, ExtIsoForest *model_outputs_ext,
     std::exception_ptr ex = NULL;
 
     /* grow trees */
-    #pragma omp parallel for num_threads(nthreads) schedule(dynamic) shared(model_outputs, model_outputs_ext, worker_memory, input_data, model_params, threw_exception)
+    #pragma omp parallel for num_threads(nthreads) schedule(dynamic) shared(model_outputs, model_outputs_ext, worker_memory, input_data, model_params, threw_exception, ex)
     for (size_t_for tree = 0; tree < (decltype(tree))ntrees; tree++)
     {
         if (interrupt_switch || threw_exception)
@@ -892,7 +1033,8 @@ int fit_iforest(IsoForest *model_outputs, ExtIsoForest *model_outputs_ext,
                 }
             }
 
-            fit_itree((model_outputs != NULL)? &model_outputs->trees[tree] : NULL,
+            fit_itree<decltype(input_data), typename std::remove_pointer<decltype(worker_memory.data())>::type, ldouble_safe>(
+                      (model_outputs != NULL)? &model_outputs->trees[tree] : NULL,
                       (model_outputs_ext != NULL)? &model_outputs_ext->hplanes[tree] : NULL,
                       worker_memory[omp_get_thread_num()],
                       input_data,
@@ -906,7 +1048,7 @@ int fit_iforest(IsoForest *model_outputs, ExtIsoForest *model_outputs_ext,
                 model_outputs_ext->hplanes[tree].shrink_to_fit();
         }
 
-        catch(...)
+        catch (...)
         {
             #pragma omp critical
             {
@@ -942,7 +1084,7 @@ int fit_iforest(IsoForest *model_outputs, ExtIsoForest *model_outputs_ext,
                           model_outputs, model_outputs_ext,
                           tmat, NULL, 0,
                           model_params.ntrees, false,
-                          standardize_dist, nthreads);
+                          standardize_dist, false, nthreads);
 
     check_interrupt_switch(ss);
     #if defined(DONT_THROW_ON_INTERRUPT)
@@ -955,7 +1097,7 @@ int fit_iforest(IsoForest *model_outputs, ExtIsoForest *model_outputs_ext,
         #ifdef _OPENMP
         if (nthreads > 1)
         {
-            for (WorkerMemory<ImputedData<sparse_ix>> &w : worker_memory)
+            for (auto &w : worker_memory)
             {
                 if (w.row_depths.size())
                 {
@@ -998,7 +1140,7 @@ int fit_iforest(IsoForest *model_outputs, ExtIsoForest *model_outputs_ext,
         #ifdef _OPENMP
         if (nthreads > 1)
         {
-            for (WorkerMemory<ImputedData<sparse_ix>> &w : worker_memory)
+            for (auto &w : worker_memory)
                 combine_tree_imputations(w, impute_vec, impute_map, input_data.has_missing, nthreads);
         }
 
@@ -1035,7 +1177,7 @@ int fit_iforest(IsoForest *model_outputs, ExtIsoForest *model_outputs_ext,
 *       if the trees are are to be added to an single-variable model. Can only pass one of
 *       'model_outputs' and 'model_outputs_ext'. Note that this function is not thread-safe,
 *       so it cannot be run in parallel for the same model object.
-* - numeric_data
+* - numeric_data[nrows * ncols_numeric]
 *       Pointer to numeric data to which to fit this additional tree. Must be ordered by columns like Fortran,
 *       not ordered by rows like C (i.e. entries 1..n contain column 0, n+1..2n column 1, etc.).
 *       Pass NULL if there are no dense numeric columns.
@@ -1045,7 +1187,7 @@ int fit_iforest(IsoForest *model_outputs, ExtIsoForest *model_outputs_ext,
 * - ncols_numeric
 *       Same parameter as for 'fit_iforest' (see the documentation in there for details). Cannot be changed from
 *       what was originally passed to 'fit_iforest'.
-* - categ_data
+* - categ_data[nrows * ncols_categ]
 *       Pointer to categorical data to which to fit this additional tree. Must be ordered by columns like Fortran,
 *       not ordered by rows like C (i.e. entries 1..n contain column 0, n+1..2n column 1, etc.).
 *       Pass NULL if there are no categorical columns. The encoding must be the same as was used
@@ -1060,7 +1202,7 @@ int fit_iforest(IsoForest *model_outputs, ExtIsoForest *model_outputs_ext,
 * - ncols_categ
 *       Same parameter as for 'fit_iforest' (see the documentation in there for details). Cannot be changed from
 *       what was originally passed to 'fit_iforest'.
-* - ncat
+* - ncat[ncols_categ]
 *       Same parameter as for 'fit_iforest' (see the documentation in there for details). May contain new categories,
 *       but should keep the same encodings that were used for previous categories.
 * - Xc[nnz]
@@ -1125,6 +1267,12 @@ int fit_iforest(IsoForest *model_outputs, ExtIsoForest *model_outputs_ext,
 * - prob_pick_by_gain_avg
 *       Same parameter as for 'fit_iforest' (see the documentation in there for details). Can be changed from
 *       what was originally passed to 'fit_iforest'.
+* - prob_pick_by_full_gain
+*       Same parameter as for 'fit_iforest' (see the documentation in there for details). Can be changed from
+*       what was originally passed to 'fit_iforest'.
+* - prob_pick_by_dens
+*       Same parameter as for 'fit_iforest' (see the documentation in there for details). Can be changed from
+*       what was originally passed to 'fit_iforest'.
 * - prob_pick_col_by_range
 *       Same parameter as for 'fit_iforest' (see the documentation in there for details). Can be changed from
 *       what was originally passed to 'fit_iforest'.
@@ -1165,8 +1313,65 @@ int fit_iforest(IsoForest *model_outputs, ExtIsoForest *model_outputs_ext,
 * - min_imp_obs
 *       Same parameter as for 'fit_iforest' (see the documentation in there for details). Can be changed from
 *       what was originally passed to 'fit_iforest'.
+* - indexer
+*       Indexer object associated to the model object ('model_outputs' or 'model_outputs_ext'), which will
+*       be updated with the new tree to add.
+*       If 'indexer' has reference points, these must be passed again here in order to index them.
+*       Pass NULL if the model has no associated indexer.
+* - ref_numeric_data[nref * ncols_numeric]
+*       Pointer to numeric data for reference points. May be ordered by rows
+*       (i.e. entries 1..n contain row 0, n+1..2n row 1, etc.) - a.k.a. row-major - or by
+*       columns (i.e. entries 1..n contain column 0, n+1..2n column 1, etc.) - a.k.a. column-major
+*       (see parameter 'ref_is_col_major').
+*       Pass NULL if there are no dense numeric columns or no reference points.
+*       Can only pass one of 'ref_numeric_data' or 'ref_Xc' + 'ref_Xc_ind' + 'ref_Xc_indptr'.
+*       If 'indexer' is passed, it has reference points, and the data to which the model was fit had
+*       numeric columns, then numeric data for reference points must be passed (in either dense or sparse format).
+* - ref_categ_data[nref * ncols_categ]
+*       Pointer to categorical data for reference points. May be ordered by rows
+*       (i.e. entries 1..n contain row 0, n+1..2n row 1, etc.) - a.k.a. row-major - or by
+*       columns (i.e. entries 1..n contain column 0, n+1..2n column 1, etc.) - a.k.a. column-major
+*       (see parameter 'ref_is_col_major').
+*       Pass NULL if there are no categorical columns or no reference points.
+*       If 'indexer' is passed, it has reference points, and the data to which the model was fit had
+*       categorical columns, then 'ref_categ_data' must be passed.
+* - ref_is_col_major
+*       Whether 'ref_numeric_data' and/or 'ref_categ_data' are in column-major order. If numeric data is
+*       passed in sparse format, categorical data must be passed in column-major format. If passing dense
+*       data, row-major format is preferred as it will be faster. If the data is passed in row-major format,
+*       must also pass 'ref_ld_numeric' and/or 'ref_ld_categ'.
+*       If both 'ref_numeric_data' and 'ref_categ_data' are passed, they must have the same orientation
+*       (row-major or column-major).
+* - ref_ld_numeric
+*       Leading dimension of the array 'ref_numeric_data', if it is passed in row-major format.
+*       Typically, this corresponds to the number of columns, but may be larger (the array will
+*       be accessed assuming that row 'n' starts at 'ref_numeric_data + n*ref_ld_numeric'). If passing
+*       'ref_numeric_data' in column-major order, this is ignored and will be assumed that the
+*       leading dimension corresponds to the number of rows. This is ignored when passing numeric
+*       data in sparse format.
+* - ref_ld_categ
+*       Leading dimension of the array 'ref_categ_data', if it is passed in row-major format.
+*       Typically, this corresponds to the number of columns, but may be larger (the array will
+*       be accessed assuming that row 'n' starts at 'ref_categ_data + n*ref_ld_categ'). If passing
+*       'ref_categ_data' in column-major order, this is ignored and will be assumed that the
+*       leading dimension corresponds to the number of rows.
+* - ref_Xc[ref_nnz]
+*       Pointer to numeric data for reference points in sparse numeric matrix in CSC format (column-compressed).
+*       Pass NULL if there are no sparse numeric columns for reference points or no reference points.
+*       Can only pass one of 'ref_numeric_data' or 'ref_Xc' + 'ref_Xc_ind' + 'ref_Xc_indptr'.
+* - ref_Xc_ind[ref_nnz]
+*       Pointer to row indices to which each non-zero entry in 'ref_Xc' corresponds.
+*       Must be in sorted order, otherwise results will be incorrect.
+*       Pass NULL if there are no sparse numeric columns in CSC format for reference points or no reference points.
+* - ref_Xc_indptr[ref_nnz]
+*       Pointer to column index pointers that tell at entry [col] where does column 'col'
+*       start and at entry [col + 1] where does column 'col' end.
+*       Pass NULL if there are no sparse numeric columns in CSC format for reference points or no reference points.
 * - random_seed
 *       Seed that will be used to generate random numbers used by the model.
+* - use_long_double
+*       Same parameter as for 'fit_iforest' (see the documentation in there for details). Can be changed from
+*       what was originally passed to 'fit_iforest'.
 */
 template <class real_t, class sparse_ix>
 int add_tree(IsoForest *model_outputs, ExtIsoForest *model_outputs_ext,
@@ -1180,26 +1385,127 @@ int add_tree(IsoForest *model_outputs, ExtIsoForest *model_outputs_ext,
              bool   fast_bratio,
              real_t col_weights[], bool weigh_by_kurt,
              double prob_pick_by_gain_pl, double prob_pick_by_gain_avg,
+             double prob_pick_by_full_gain, double prob_pick_by_dens,
              double prob_pick_col_by_range, double prob_pick_col_by_var,
              double prob_pick_col_by_kurt,
              double min_gain, MissingAction missing_action,
              CategSplit cat_split_type, NewCategAction new_cat_action,
              UseDepthImp depth_imp, WeighImpRows weigh_imp_rows,
              bool   all_perm, Imputer *imputer, size_t min_imp_obs,
+             TreesIndexer *indexer,
+             real_t ref_numeric_data[], int ref_categ_data[],
+             bool ref_is_col_major, size_t ref_ld_numeric, size_t ref_ld_categ,
+             real_t ref_Xc[], sparse_ix ref_Xc_ind[], sparse_ix ref_Xc_indptr[],
+             uint64_t random_seed, bool use_long_double)
+{
+    if (use_long_double && !has_long_double()) {
+        use_long_double = false;
+        fprintf(stderr, "Passed 'use_long_double=true', but library was compiled without long double support.\n");
+    }
+    #ifndef NO_LONG_DOUBLE
+    if (likely(!use_long_double))
+    #endif
+        return add_tree_internal<real_t, sparse_ix, double>(
+            model_outputs, model_outputs_ext,
+            numeric_data,  ncols_numeric,
+            categ_data,    ncols_categ,    ncat,
+            Xc, Xc_ind, Xc_indptr,
+            ndim, ntry, coef_type, coef_by_prop,
+            sample_weights, nrows,
+            max_depth,     ncols_per_tree,
+            limit_depth,   penalize_range, standardize_data,
+            fast_bratio,
+            col_weights, weigh_by_kurt,
+            prob_pick_by_gain_pl, prob_pick_by_gain_avg,
+            prob_pick_by_full_gain, prob_pick_by_dens,
+            prob_pick_col_by_range, prob_pick_col_by_var,
+            prob_pick_col_by_kurt,
+            min_gain, missing_action,
+            cat_split_type, new_cat_action,
+            depth_imp, weigh_imp_rows,
+            all_perm, imputer, min_imp_obs,
+            indexer,
+            ref_numeric_data, ref_categ_data,
+            ref_is_col_major, ref_ld_numeric, ref_ld_categ,
+            ref_Xc, ref_Xc_ind, ref_Xc_indptr,
+            random_seed
+        );
+    #ifndef NO_LONG_DOUBLE
+    else
+        return add_tree_internal<real_t, sparse_ix, long double>(
+            model_outputs, model_outputs_ext,
+            numeric_data,  ncols_numeric,
+            categ_data,    ncols_categ,    ncat,
+            Xc, Xc_ind, Xc_indptr,
+            ndim, ntry, coef_type, coef_by_prop,
+            sample_weights, nrows,
+            max_depth,     ncols_per_tree,
+            limit_depth,   penalize_range, standardize_data,
+            fast_bratio,
+            col_weights, weigh_by_kurt,
+            prob_pick_by_gain_pl, prob_pick_by_gain_avg,
+            prob_pick_by_full_gain, prob_pick_by_dens,
+            prob_pick_col_by_range, prob_pick_col_by_var,
+            prob_pick_col_by_kurt,
+            min_gain, missing_action,
+            cat_split_type, new_cat_action,
+            depth_imp, weigh_imp_rows,
+            all_perm, imputer, min_imp_obs,
+            indexer,
+            ref_numeric_data, ref_categ_data,
+            ref_is_col_major, ref_ld_numeric, ref_ld_categ,
+            ref_Xc, ref_Xc_ind, ref_Xc_indptr,
+            random_seed
+        );
+    #endif
+}
+
+template <class real_t, class sparse_ix, class ldouble_safe>
+int add_tree_internal(
+             IsoForest *model_outputs, ExtIsoForest *model_outputs_ext,
+             real_t numeric_data[],  size_t ncols_numeric,
+             int    categ_data[],    size_t ncols_categ,    int ncat[],
+             real_t Xc[], sparse_ix Xc_ind[], sparse_ix Xc_indptr[],
+             size_t ndim, size_t ntry, CoefType coef_type, bool coef_by_prop,
+             real_t sample_weights[], size_t nrows,
+             size_t max_depth,     size_t ncols_per_tree,
+             bool   limit_depth,   bool penalize_range, bool standardize_data,
+             bool   fast_bratio,
+             real_t col_weights[], bool weigh_by_kurt,
+             double prob_pick_by_gain_pl, double prob_pick_by_gain_avg,
+             double prob_pick_by_full_gain, double prob_pick_by_dens,
+             double prob_pick_col_by_range, double prob_pick_col_by_var,
+             double prob_pick_col_by_kurt,
+             double min_gain, MissingAction missing_action,
+             CategSplit cat_split_type, NewCategAction new_cat_action,
+             UseDepthImp depth_imp, WeighImpRows weigh_imp_rows,
+             bool   all_perm, Imputer *imputer, size_t min_imp_obs,
+             TreesIndexer *indexer,
+             real_t ref_numeric_data[], int ref_categ_data[],
+             bool ref_is_col_major, size_t ref_ld_numeric, size_t ref_ld_categ,
+             real_t ref_Xc[], sparse_ix ref_Xc_ind[], sparse_ix ref_Xc_indptr[],
              uint64_t random_seed)
 {
     if (
-        prob_pick_by_gain_avg < 0 || prob_pick_by_gain_pl < 0 || prob_pick_col_by_range < 0 ||
-        prob_pick_col_by_var < 0 || prob_pick_col_by_kurt < 0
+        prob_pick_by_gain_avg  < 0  || prob_pick_by_gain_pl  < 0 ||
+        prob_pick_by_full_gain < 0  || prob_pick_by_dens     < 0 ||
+        prob_pick_col_by_range < 0  ||
+        prob_pick_col_by_var   < 0  || prob_pick_col_by_kurt < 0
     ) {
         throw std::runtime_error("Cannot pass negative probabilities.\n");
     }
-    if (prob_pick_col_by_range && categ_data != NULL)
+    if (prob_pick_col_by_range && ncols_categ)
         throw std::runtime_error("'prob_pick_col_by_range' is not compatible with categorical data.\n");
+    if (prob_pick_by_full_gain && ncols_categ)
+        throw std::runtime_error("'prob_pick_by_full_gain' is not compatible with categorical data.\n");
     if (prob_pick_col_by_kurt && weigh_by_kurt)
         throw std::runtime_error("'weigh_by_kurt' and 'prob_pick_col_by_kurt' cannot be used together.\n");
     if (ndim == 0 && model_outputs == NULL)
         throw std::runtime_error("Must pass 'ndim>0' in the extended model.\n");
+    if (indexer != NULL && !indexer->indices.empty() && !indexer->indices.front().reference_points.empty()) {
+        if (ref_numeric_data == NULL && ref_categ_data == NULL && ref_Xc_indptr == NULL)
+            throw std::runtime_error("'indexer' has reference points. Those points must be passed to index them in the new tree to add.\n");
+    }
 
     std::vector<ImputeNode> *impute_nodes = NULL;
 
@@ -1210,8 +1516,11 @@ int add_tree(IsoForest *model_outputs, ExtIsoForest *model_outputs_ext,
     if (model_outputs != NULL)
         ntry = std::min(ntry, ncols_numeric + ncols_categ);
 
-    if(ncols_per_tree == 0)
+    if (ncols_per_tree == 0)
         ncols_per_tree = ncols_numeric + ncols_categ;
+
+    if (indexer != NULL && indexer->indices.empty())
+        indexer = NULL;
 
     InputData<real_t, sparse_ix>
               input_data     = {numeric_data, ncols_numeric, categ_data, ncat, max_categ, ncols_categ,
@@ -1220,11 +1529,14 @@ int add_tree(IsoForest *model_outputs, ExtIsoForest *model_outputs_ext,
                                 Xc, Xc_ind, Xc_indptr,
                                 0, 0, std::vector<double>(),
                                 std::vector<char>(), 0, NULL,
-                                (double*)NULL, (double*)NULL, (int*)NULL, std::vector<double>()};
+                                (double*)NULL, (double*)NULL, (int*)NULL, std::vector<double>(),
+                                std::vector<double>(), std::vector<double>(),
+                                std::vector<size_t>(), std::vector<size_t>()};
     ModelParams model_params = {false, nrows, (size_t)1, ncols_per_tree,
                                 max_depth? max_depth : (nrows - 1),
                                 penalize_range, standardize_data, random_seed, weigh_by_kurt,
                                 prob_pick_by_gain_avg, prob_pick_by_gain_pl,
+                                prob_pick_by_full_gain, prob_pick_by_dens,
                                 prob_pick_col_by_range, prob_pick_col_by_var,
                                 prob_pick_col_by_kurt,
                                 min_gain, cat_split_type, new_cat_action, missing_action,
@@ -1233,7 +1545,19 @@ int add_tree(IsoForest *model_outputs, ExtIsoForest *model_outputs_ext,
                                 (model_outputs != NULL)? 0 : ndim, ntry,
                                 coef_type, coef_by_prop, false, false, false, depth_imp, weigh_imp_rows, min_imp_obs};
 
-    std::unique_ptr<WorkerMemory<ImputedData<sparse_ix>>> workspace(new WorkerMemory<ImputedData<sparse_ix>>());
+    if (prob_pick_by_full_gain)
+    {
+        if (input_data.Xc_indptr == NULL)
+            colmajor_to_rowmajor(input_data.numeric_data, input_data.nrows, input_data.ncols_numeric, input_data.X_row_major);
+        else
+            colmajor_to_rowmajor(input_data.Xc, input_data.Xc_ind, input_data.Xc_indptr,
+                                 input_data.nrows, input_data.ncols_numeric,
+                                 input_data.Xr, input_data.Xr_ind, input_data.Xr_indptr);
+    }
+
+    std::unique_ptr<WorkerMemory<ImputedData<sparse_ix, ldouble_safe>, ldouble_safe, real_t>> workspace(
+        new WorkerMemory<ImputedData<sparse_ix, ldouble_safe>, ldouble_safe, real_t>()
+    );
 
     size_t last_tree;
     bool added_tree = false;
@@ -1259,13 +1583,24 @@ int add_tree(IsoForest *model_outputs, ExtIsoForest *model_outputs_ext,
             impute_nodes = &(imputer->imputer_tree.back());
         }
 
-        fit_itree((model_outputs != NULL)? &model_outputs->trees.back() : NULL,
+        if (indexer != NULL)
+        {
+            indexer->indices.emplace_back();
+        }
+
+        SignalSwitcher ss = SignalSwitcher();
+        check_interrupt_switch(ss);
+
+        fit_itree<decltype(input_data), typename std::remove_pointer<decltype(workspace.get())>::type, ldouble_safe>(
+                  (model_outputs != NULL)? &model_outputs->trees.back() : NULL,
                   (model_outputs_ext != NULL)? &model_outputs_ext->hplanes.back() : NULL,
                   *workspace,
                   input_data,
                   model_params,
                   impute_nodes,
                   last_tree);
+
+        check_interrupt_switch(ss);
 
         if (model_outputs != NULL) {
             model_outputs->trees.back().shrink_to_fit();
@@ -1278,9 +1613,102 @@ int add_tree(IsoForest *model_outputs, ExtIsoForest *model_outputs_ext,
 
         if (imputer != NULL)
             imputer->imputer_tree.back().shrink_to_fit();
+
+        if (indexer != NULL)
+        {
+            if (model_outputs != NULL)
+                build_terminal_node_mappings_single_tree(indexer->indices.back().terminal_node_mappings,
+                                                         indexer->indices.back().n_terminal,
+                                                         model_outputs->trees.back());
+            else
+                build_terminal_node_mappings_single_tree(indexer->indices.back().terminal_node_mappings,
+                                                         indexer->indices.back().n_terminal,
+                                                         model_outputs_ext->hplanes.back());
+
+            check_interrupt_switch(ss);
+
+
+            if (!indexer->indices.front().node_distances.empty())
+            {
+                std::vector<size_t> temp;
+                temp.reserve(indexer->indices.back().n_terminal);
+                if (model_outputs != NULL) {
+                    build_dindex(
+                        temp,
+                        indexer->indices.back().terminal_node_mappings,
+                        indexer->indices.back().node_distances,
+                        indexer->indices.back().node_depths,
+                        indexer->indices.back().n_terminal,
+                        model_outputs->trees.back()
+                    );
+                }
+                else {
+                    build_dindex(
+                        temp,
+                        indexer->indices.back().terminal_node_mappings,
+                        indexer->indices.back().node_distances,
+                        indexer->indices.back().node_depths,
+                        indexer->indices.back().n_terminal,
+                        model_outputs_ext->hplanes.back()
+                    );
+                }
+            }
+
+            check_interrupt_switch(ss);
+            if (!indexer->indices.front().reference_points.empty())
+            {
+                size_t n_ref = indexer->indices.front().reference_points.size();
+                std::vector<sparse_ix> terminal_indices(n_ref);
+                std::unique_ptr<double[]> ignored(new double[n_ref]);
+                if (model_outputs != NULL)
+                {
+                    IsoForest single_tree_model;
+                    single_tree_model.new_cat_action = model_outputs->new_cat_action;
+                    single_tree_model.cat_split_type = model_outputs->cat_split_type;
+                    single_tree_model.missing_action = model_outputs->missing_action;
+                    single_tree_model.trees.push_back(model_outputs->trees.back());
+
+                    predict_iforest(ref_numeric_data, ref_categ_data,
+                                    ref_is_col_major, ref_ld_numeric, ref_ld_categ,
+                                    ref_Xc, ref_Xc_ind, ref_Xc_indptr,
+                                    (real_t*)NULL, (sparse_ix*)NULL, (sparse_ix*)NULL,
+                                    n_ref, 1, false,
+                                    &single_tree_model, (ExtIsoForest*)NULL,
+                                    ignored.get(), terminal_indices.data(),
+                                    (double*)NULL,
+                                    indexer);
+                }
+
+                else
+                {
+                    ExtIsoForest single_tree_model;
+                    single_tree_model.new_cat_action = model_outputs_ext->new_cat_action;
+                    single_tree_model.cat_split_type = model_outputs_ext->cat_split_type;
+                    single_tree_model.missing_action = model_outputs_ext->missing_action;
+                    single_tree_model.hplanes.push_back(model_outputs_ext->hplanes.back());
+
+                    predict_iforest(ref_numeric_data, ref_categ_data,
+                                    ref_is_col_major, ref_ld_numeric, ref_ld_categ,
+                                    ref_Xc, ref_Xc_ind, ref_Xc_indptr,
+                                    (real_t*)NULL, (sparse_ix*)NULL, (sparse_ix*)NULL,
+                                    n_ref, 1, false,
+                                    (IsoForest*)NULL, &single_tree_model,
+                                    ignored.get(), terminal_indices.data(),
+                                    (double*)NULL,
+                                    indexer);
+                }
+
+                ignored.reset();
+                indexer->indices.back().reference_points.assign(terminal_indices.begin(), terminal_indices.end());
+                indexer->indices.back().reference_points.shrink_to_fit();
+                build_ref_node(indexer->indices.back());
+            }
+
+            check_interrupt_switch(ss);
+        }
     }
 
-    catch(...)
+    catch (...)
     {
         if (added_tree)
         {
@@ -1294,6 +1722,12 @@ int add_tree(IsoForest *model_outputs, ExtIsoForest *model_outputs_ext,
                 else
                     imputer->imputer_tree.resize(model_outputs_ext->hplanes.size());
             }
+            if (indexer != NULL) {
+                if (model_outputs != NULL)
+                    indexer->indices.resize(model_outputs->trees.size());
+                else
+                    indexer->indices.resize(model_outputs_ext->hplanes.size());
+            }
         }
         throw;
     }
@@ -1301,7 +1735,7 @@ int add_tree(IsoForest *model_outputs, ExtIsoForest *model_outputs_ext,
     return EXIT_SUCCESS;
 }
 
-template <class InputData, class WorkerMemory>
+template <class InputData, class WorkerMemory, class ldouble_safe>
 void fit_itree(std::vector<IsoTree>    *tree_root,
                std::vector<IsoHPlane>  *hplane_root,
                WorkerMemory             &workspace,
@@ -1321,7 +1755,8 @@ void fit_itree(std::vector<IsoTree>    *tree_root,
                                        input_data.btree_weights_init.end());
     workspace.rnd_generator.seed(model_params.random_seed + tree_num);
     workspace.rbin  = UniformUnitInterval(0, 1);
-    sample_random_rows(workspace.ix_arr, input_data.nrows, model_params.with_replacement,
+    sample_random_rows<typename std::remove_pointer<decltype(input_data.numeric_data)>::type, ldouble_safe>(
+                       workspace.ix_arr, input_data.nrows, model_params.with_replacement,
                        workspace.rnd_generator, workspace.ix_all,
                        (input_data.weight_as_sample)? input_data.sample_weights : NULL,
                        workspace.btree_weights, input_data.log2_n, input_data.btree_offset,
@@ -1332,7 +1767,8 @@ void fit_itree(std::vector<IsoTree>    *tree_root,
     /* in some cases, it's not possible to use column weights even if they are given,
        because every single column will always need to be checked or end up being used. */
     bool avoid_col_weights = (tree_root != NULL && model_params.ntry >= model_params.ncols_per_tree &&
-                              model_params.prob_pick_by_gain_avg + model_params.prob_pick_by_gain_pl >= 1)
+                              model_params.prob_pick_by_gain_avg  + model_params.prob_pick_by_gain_pl +
+                              model_params.prob_pick_by_full_gain + model_params.prob_pick_by_dens >= 1)
                                 ||
                              (tree_root == NULL && model_params.ndim >= model_params.ncols_per_tree)
                                 ||
@@ -1447,7 +1883,7 @@ void fit_itree(std::vector<IsoTree>    *tree_root,
     workspace.changed_weights = false;
     if (hplane_root == NULL) workspace.weights_map.clear();
 
-    long double weight_scaling = 0;
+    ldouble_safe weight_scaling = 0;
     if (input_data.sample_weights != NULL && !input_data.weight_as_sample)
     {
         workspace.changed_weights = true;
@@ -1467,7 +1903,7 @@ void fit_itree(std::vector<IsoTree>    *tree_root,
             {
                 for (const size_t ix : workspace.ix_arr)
                     weight_scaling += input_data.sample_weights[ix];
-                weight_scaling = (long double)model_params.sample_size / weight_scaling;
+                weight_scaling = (ldouble_safe)model_params.sample_size / weight_scaling;
                 workspace.weights_map.reserve(workspace.ix_arr.size());
                 for (const size_t ix : workspace.ix_arr)
                     workspace.weights_map[ix] = input_data.sample_weights[ix] * weight_scaling;
@@ -1481,10 +1917,10 @@ void fit_itree(std::vector<IsoTree>    *tree_root,
                     workspace.weights_arr.assign(input_data.sample_weights, input_data.sample_weights + input_data.nrows);
                     weight_scaling = std::accumulate(workspace.ix_arr.begin(),
                                                      workspace.ix_arr.end(),
-                                                     (long double)0,
-                                                     [&input_data](const long double a, const size_t b){return a + (long double)input_data.sample_weights[b];}
+                                                     (ldouble_safe)0,
+                                                     [&input_data](const ldouble_safe a, const size_t b){return a + (ldouble_safe)input_data.sample_weights[b];}
                                                      );
-                    weight_scaling = (long double)model_params.sample_size / weight_scaling;
+                    weight_scaling = (ldouble_safe)model_params.sample_size / weight_scaling;
                     for (double &w : workspace.weights_arr)
                         w *= weight_scaling;
                 }
@@ -1496,7 +1932,7 @@ void fit_itree(std::vector<IsoTree>    *tree_root,
                         weight_scaling += input_data.sample_weights[ix];
                         workspace.weights_arr[ix] = input_data.sample_weights[ix];
                     }
-                    weight_scaling = (long double)model_params.sample_size / weight_scaling;
+                    weight_scaling = (ldouble_safe)model_params.sample_size / weight_scaling;
                     for (double &w : workspace.weights_arr)
                         w *= weight_scaling;
                 }
@@ -1510,11 +1946,13 @@ void fit_itree(std::vector<IsoTree>    *tree_root,
 
     /* make space for buffers if not already allocated */
     if (
-            (model_params.prob_pick_by_gain_avg > 0 ||
-             model_params.prob_pick_by_gain_pl > 0  ||
-             model_params.prob_pick_col_by_range > 0  ||
-             model_params.prob_pick_col_by_var > 0  ||
-             model_params.prob_pick_col_by_kurt > 0  ||
+            (model_params.prob_pick_by_gain_avg    > 0  ||
+             model_params.prob_pick_by_gain_pl     > 0  ||
+             model_params.prob_pick_by_full_gain   > 0  ||
+             model_params.prob_pick_by_dens        > 0  ||
+             model_params.prob_pick_col_by_range   > 0  ||
+             model_params.prob_pick_col_by_var     > 0  ||
+             model_params.prob_pick_col_by_kurt    > 0  ||
              model_params.weigh_by_kurt || hplane_root != NULL)
                 &&
             (workspace.buffer_dbl.empty() && workspace.buffer_szt.empty() && workspace.buffer_chr.empty())
@@ -1524,8 +1962,10 @@ void fit_itree(std::vector<IsoTree>    *tree_root,
         size_t min_size_szt = 0;
         size_t min_size_chr = 0;
 
-        bool gain = model_params.prob_pick_by_gain_avg > 0 ||
-                    model_params.prob_pick_by_gain_pl  > 0;
+        bool gain = model_params.prob_pick_by_gain_avg  > 0 ||
+                    model_params.prob_pick_by_gain_pl   > 0 ||
+                    model_params.prob_pick_by_full_gain > 0 ||
+                    model_params.prob_pick_by_dens      > 0;
 
         if (input_data.ncols_categ)
         {
@@ -1608,7 +2048,9 @@ void fit_itree(std::vector<IsoTree>    *tree_root,
             model_params.cat_split_type == SubSet &&
             (
                 model_params.prob_pick_by_gain_avg  || 
-                model_params.prob_pick_by_gain_pl
+                model_params.prob_pick_by_gain_pl   ||
+                model_params.prob_pick_by_full_gain ||
+                model_params.prob_pick_by_dens
             )
            )
         {
@@ -1620,12 +2062,16 @@ void fit_itree(std::vector<IsoTree>    *tree_root,
     /* Other potentially necessary buffers */
     if (
         tree_root != NULL && model_params.missing_action == Impute &&
-        (model_params.prob_pick_by_gain_avg || model_params.prob_pick_by_gain_pl) &&
+        (model_params.prob_pick_by_gain_avg  || model_params.prob_pick_by_gain_pl ||
+         model_params.prob_pick_by_full_gain || model_params.prob_pick_by_dens) &&
         input_data.Xc_indptr == NULL && input_data.ncols_numeric && workspace.imputed_x_buffer.empty()
     )
     {
         workspace.imputed_x_buffer.resize(input_data.nrows);
     }
+
+    if (model_params.prob_pick_by_full_gain && workspace.col_indices.empty())
+        workspace.col_indices.resize(model_params.ncols_per_tree);
 
     if (
         (model_params.prob_pick_col_by_range || model_params.prob_pick_col_by_var) &&
@@ -1663,15 +2109,19 @@ void fit_itree(std::vector<IsoTree>    *tree_root,
                 for (size_t col = 0; col < input_data.ncols_numeric; col++)
                 {
                     if (workspace.weights_arr.empty() && workspace.weights_map.empty())
-                        kurt_weights[col] = calc_kurtosis(workspace.ix_arr.data(), workspace.st, workspace.end,
+                        kurt_weights[col] = calc_kurtosis<typename std::remove_pointer<decltype(input_data.numeric_data)>::type, ldouble_safe>(
+                                                          workspace.ix_arr.data(), workspace.st, workspace.end,
                                                           input_data.numeric_data + col * input_data.nrows,
                                                           model_params.missing_action);
                     else if (!workspace.weights_arr.empty())
-                        kurt_weights[col] = calc_kurtosis_weighted(workspace.ix_arr.data(), workspace.st, workspace.end,
+                        kurt_weights[col] = calc_kurtosis_weighted<typename std::remove_pointer<decltype(input_data.numeric_data)>::type, decltype(workspace.weights_arr), ldouble_safe>(
+                                                                   workspace.ix_arr.data(), workspace.st, workspace.end,
                                                                    input_data.numeric_data + col * input_data.nrows,
                                                                    model_params.missing_action, workspace.weights_arr);
                     else
-                        kurt_weights[col] = calc_kurtosis_weighted(workspace.ix_arr.data(), workspace.st, workspace.end,
+                        kurt_weights[col] = calc_kurtosis_weighted<typename std::remove_pointer<decltype(input_data.numeric_data)>::type,
+                                                                   decltype(workspace.weights_map), ldouble_safe>(
+                                                                   workspace.ix_arr.data(), workspace.st, workspace.end,
                                                                    input_data.numeric_data + col * input_data.nrows,
                                                                    model_params.missing_action, workspace.weights_map);
                 }
@@ -1683,15 +2133,24 @@ void fit_itree(std::vector<IsoTree>    *tree_root,
                 for (size_t col = 0; col < input_data.ncols_numeric; col++)
                 {
                     if (workspace.weights_arr.empty() && workspace.weights_map.empty())
-                        kurt_weights[col] = calc_kurtosis(workspace.ix_arr.data(), workspace.st, workspace.end, col,
+                        kurt_weights[col] = calc_kurtosis<typename std::remove_pointer<decltype(input_data.Xc)>::type,
+                                                          typename std::remove_pointer<decltype(input_data.Xc_indptr)>::type,
+                                                          ldouble_safe>(
+                                                          workspace.ix_arr.data(), workspace.st, workspace.end, col,
                                                           input_data.Xc, input_data.Xc_ind, input_data.Xc_indptr,
                                                           model_params.missing_action);
                     else if (!workspace.weights_arr.empty())
-                        kurt_weights[col] = calc_kurtosis_weighted(workspace.ix_arr.data(), workspace.st, workspace.end, col,
+                        kurt_weights[col] = calc_kurtosis_weighted<typename std::remove_pointer<decltype(input_data.Xc)>::type,
+                                                                   typename std::remove_pointer<decltype(input_data.Xc_indptr)>::type,
+                                                                   decltype(workspace.weights_arr), ldouble_safe>(
+                                                                   workspace.ix_arr.data(), workspace.st, workspace.end, col,
                                                                    input_data.Xc, input_data.Xc_ind, input_data.Xc_indptr,
                                                                    model_params.missing_action, workspace.weights_arr);
                     else
-                        kurt_weights[col] = calc_kurtosis_weighted(workspace.ix_arr.data(), workspace.st, workspace.end, col,
+                        kurt_weights[col] = calc_kurtosis_weighted<typename std::remove_pointer<decltype(input_data.Xc)>::type,
+                                                                   typename std::remove_pointer<decltype(input_data.Xc_indptr)>::type,
+                                                                   decltype(workspace.weights_map), ldouble_safe>(
+                                                                   workspace.ix_arr.data(), workspace.st, workspace.end, col,
                                                                    input_data.Xc, input_data.Xc_ind, input_data.Xc_indptr,
                                                                    model_params.missing_action, workspace.weights_map);
                 }
@@ -1701,20 +2160,23 @@ void fit_itree(std::vector<IsoTree>    *tree_root,
             {
                 if (workspace.weights_arr.empty() && workspace.weights_map.empty())
                     kurt_weights[col + input_data.ncols_numeric] =
-                        calc_kurtosis(workspace.ix_arr.data(), workspace.st, workspace.end,
+                        calc_kurtosis<ldouble_safe>(
+                                      workspace.ix_arr.data(), workspace.st, workspace.end,
                                       input_data.categ_data + col * input_data.nrows, input_data.ncat[col],
                                       workspace.buffer_szt.data(), workspace.buffer_dbl.data(),
                                       model_params.missing_action, model_params.cat_split_type, workspace.rnd_generator);
                 else if (!workspace.weights_arr.empty())
                     kurt_weights[col + input_data.ncols_numeric] =
-                        calc_kurtosis_weighted(workspace.ix_arr.data(), workspace.st, workspace.end,
+                        calc_kurtosis_weighted<decltype(workspace.weights_arr), ldouble_safe>(
+                                               workspace.ix_arr.data(), workspace.st, workspace.end,
                                                input_data.categ_data + col * input_data.nrows, input_data.ncat[col],
                                                workspace.buffer_dbl.data(),
                                                model_params.missing_action, model_params.cat_split_type, workspace.rnd_generator,
                                                workspace.weights_arr);
                 else
                     kurt_weights[col + input_data.ncols_numeric] =
-                        calc_kurtosis_weighted(workspace.ix_arr.data(), workspace.st, workspace.end,
+                        calc_kurtosis_weighted<decltype(workspace.weights_map), ldouble_safe>(
+                                               workspace.ix_arr.data(), workspace.st, workspace.end,
                                                input_data.categ_data + col * input_data.nrows, input_data.ncat[col],
                                                workspace.buffer_dbl.data(),
                                                model_params.missing_action, model_params.cat_split_type, workspace.rnd_generator,
@@ -1741,7 +2203,8 @@ void fit_itree(std::vector<IsoTree>    *tree_root,
             std::vector<size_t> cols_take(model_params.ncols_per_tree);
             std::vector<size_t> buffer1;
             std::vector<bool> buffer2;
-            sample_random_rows(cols_take, input_data.ncols_tot, false,
+            sample_random_rows<double, double>(
+                               cols_take, input_data.ncols_tot, false,
                                workspace.rnd_generator, buffer1,
                                (double*)NULL, kurt_weights, /* <- will not get used */
                                (size_t)0, (size_t)0, buffer2);
@@ -1767,15 +2230,20 @@ void fit_itree(std::vector<IsoTree>    *tree_root,
                     if (input_data.Xc_indptr == NULL)
                     {
                         if (workspace.weights_arr.empty() && workspace.weights_map.empty())
-                            kurt_weights[col] = calc_kurtosis(workspace.ix_arr.data(), workspace.st, workspace.end,
+                            kurt_weights[col] = calc_kurtosis<typename std::remove_pointer<decltype(input_data.numeric_data)>::type, ldouble_safe>(
+                                                              workspace.ix_arr.data(), workspace.st, workspace.end,
                                                               input_data.numeric_data + col * input_data.nrows,
                                                               model_params.missing_action);
                         else if (!workspace.weights_arr.empty())
-                            kurt_weights[col] = calc_kurtosis_weighted(workspace.ix_arr.data(), workspace.st, workspace.end,
+                            kurt_weights[col] = calc_kurtosis_weighted<typename std::remove_pointer<decltype(input_data.numeric_data)>::type,
+                                                                       decltype(workspace.weights_arr), ldouble_safe>(
+                                                                       workspace.ix_arr.data(), workspace.st, workspace.end,
                                                                        input_data.numeric_data + col * input_data.nrows,
                                                                        model_params.missing_action, workspace.weights_arr);
                         else
-                            kurt_weights[col] = calc_kurtosis_weighted(workspace.ix_arr.data(), workspace.st, workspace.end,
+                            kurt_weights[col] = calc_kurtosis_weighted<typename std::remove_pointer<decltype(input_data.numeric_data)>::type,
+                                                                       decltype(workspace.weights_map), ldouble_safe>(
+                                                                       workspace.ix_arr.data(), workspace.st, workspace.end,
                                                                        input_data.numeric_data + col * input_data.nrows,
                                                                        model_params.missing_action, workspace.weights_map);
                     }
@@ -1783,15 +2251,24 @@ void fit_itree(std::vector<IsoTree>    *tree_root,
                     else
                     {
                         if (workspace.weights_arr.empty() && workspace.weights_map.empty())
-                            kurt_weights[col] = calc_kurtosis(workspace.ix_arr.data(), workspace.st, workspace.end, col,
+                            kurt_weights[col] = calc_kurtosis<typename std::remove_pointer<decltype(input_data.Xc)>::type,
+                                                              typename std::remove_pointer<decltype(input_data.Xc_indptr)>::type,
+                                                              ldouble_safe>(
+                                                              workspace.ix_arr.data(), workspace.st, workspace.end, col,
                                                               input_data.Xc, input_data.Xc_ind, input_data.Xc_indptr,
                                                               model_params.missing_action);
                         else if (!workspace.weights_arr.empty())
-                            kurt_weights[col] = calc_kurtosis_weighted(workspace.ix_arr.data(), workspace.st, workspace.end, col,
+                            kurt_weights[col] = calc_kurtosis_weighted<typename std::remove_pointer<decltype(input_data.Xc)>::type,
+                                                                       typename std::remove_pointer<decltype(input_data.Xc_indptr)>::type,
+                                                                       decltype(workspace.weights_arr), ldouble_safe>(
+                                                                       workspace.ix_arr.data(), workspace.st, workspace.end, col,
                                                                        input_data.Xc, input_data.Xc_ind, input_data.Xc_indptr,
                                                                        model_params.missing_action, workspace.weights_arr);
                         else
-                            kurt_weights[col] = calc_kurtosis_weighted(workspace.ix_arr.data(), workspace.st, workspace.end, col,
+                            kurt_weights[col] = calc_kurtosis_weighted<typename std::remove_pointer<decltype(input_data.Xc)>::type,
+                                                                       typename std::remove_pointer<decltype(input_data.Xc_indptr)>::type,
+                                                                       decltype(workspace.weights_map), ldouble_safe>(
+                                                                       workspace.ix_arr.data(), workspace.st, workspace.end, col,
                                                                        input_data.Xc, input_data.Xc_ind, input_data.Xc_indptr,
                                                                        model_params.missing_action, workspace.weights_map);
                     }
@@ -1801,27 +2278,30 @@ void fit_itree(std::vector<IsoTree>    *tree_root,
                 {
                     if (workspace.weights_arr.empty() && workspace.weights_map.empty())
                         kurt_weights[col] =
-                            calc_kurtosis(workspace.ix_arr.data(), workspace.st, workspace.end,
+                            calc_kurtosis<ldouble_safe>(
+                                          workspace.ix_arr.data(), workspace.st, workspace.end,
                                           input_data.categ_data + (col - input_data.ncols_numeric) * input_data.nrows,
                                           input_data.ncat[col - input_data.ncols_numeric],
                                           workspace.buffer_szt.data(), workspace.buffer_dbl.data(),
                                           model_params.missing_action, model_params.cat_split_type, workspace.rnd_generator);
                     else if (!workspace.weights_arr.empty())
                         kurt_weights[col] =
-                            calc_kurtosis_weighted(workspace.ix_arr.data(), workspace.st, workspace.end,
-                                                  input_data.categ_data + (col - input_data.ncols_numeric) * input_data.nrows,
-                                                  input_data.ncat[col - input_data.ncols_numeric],
-                                                  workspace.buffer_dbl.data(),
-                                                  model_params.missing_action, model_params.cat_split_type, workspace.rnd_generator,
-                                                  workspace.weights_arr);
+                            calc_kurtosis_weighted<decltype(workspace.weights_arr), ldouble_safe>(
+                                                   workspace.ix_arr.data(), workspace.st, workspace.end,
+                                                   input_data.categ_data + (col - input_data.ncols_numeric) * input_data.nrows,
+                                                   input_data.ncat[col - input_data.ncols_numeric],
+                                                   workspace.buffer_dbl.data(),
+                                                   model_params.missing_action, model_params.cat_split_type, workspace.rnd_generator,
+                                                   workspace.weights_arr);
                     else
                         kurt_weights[col] =
-                            calc_kurtosis_weighted(workspace.ix_arr.data(), workspace.st, workspace.end,
-                                                  input_data.categ_data + (col - input_data.ncols_numeric) * input_data.nrows,
-                                                  input_data.ncat[col - input_data.ncols_numeric],
-                                                  workspace.buffer_dbl.data(),
-                                                  model_params.missing_action, model_params.cat_split_type, workspace.rnd_generator,
-                                                  workspace.weights_map);
+                            calc_kurtosis_weighted<decltype(workspace.weights_map), ldouble_safe>(
+                                                   workspace.ix_arr.data(), workspace.st, workspace.end,
+                                                   input_data.categ_data + (col - input_data.ncols_numeric) * input_data.nrows,
+                                                   input_data.ncat[col - input_data.ncols_numeric],
+                                                   workspace.buffer_dbl.data(),
+                                                   model_params.missing_action, model_params.cat_split_type, workspace.rnd_generator,
+                                                   workspace.weights_map);
                 }
 
                 /* Note to self: don't move this  to outside of the braces, as it needs to assign a weight
@@ -1859,7 +2339,7 @@ void fit_itree(std::vector<IsoTree>    *tree_root,
         workspace.col_sampler.initialize(input_data.ncols_tot);
     }
     else {
-        workspace.col_sampler = *((ColumnSampler*)input_data.preinitialized_col_sampler);
+        workspace.col_sampler = *((ColumnSampler<ldouble_safe>*)input_data.preinitialized_col_sampler);
         col_sampler_is_fresh = false;
     }
     /* TODO: this can be done more efficiently when sub-sampling columns */
@@ -1894,19 +2374,26 @@ void fit_itree(std::vector<IsoTree>    *tree_root,
     }
 
     if (tree_root != NULL)
-        split_itree_recursive(*tree_root,
+    {
+        split_itree_recursive<InputData, WorkerMemory, ldouble_safe>(
+                              *tree_root,
                               workspace,
                               input_data,
                               model_params,
                               impute_nodes,
                               0);
+    }
+
     else
-        split_hplane_recursive(*hplane_root,
+    {
+        split_hplane_recursive<InputData, WorkerMemory, ldouble_safe>(
+                               *hplane_root,
                                workspace,
                                input_data,
                                model_params,
                                impute_nodes,
                                0);
+    }
 
     /* if producing imputation structs, only need to keep the ones for terminal nodes */
     if (impute_nodes != NULL)
