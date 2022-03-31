@@ -221,9 +221,7 @@ using std::memcpy;
 #define square(x) ((x) * (x))
 /* https://stackoverflow.com/questions/2249731/how-do-i-get-bit-by-bit-data-from-an-integer-value-in-c */
 #define extract_bit(number, bit) (((number) >> (bit)) & 1)
-using std::isinf;
-using std::isnan;
-#define is_na_or_inf(x) (isnan(x) || isinf(x))
+#define is_na_or_inf(x) (std::isnan(x) || std::isinf(x))
 
 /* MSVC doesn't support long doubles, so this avoids unnecessarily increasing library size.
    MinGW supports them but has issues with their computations.

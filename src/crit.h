@@ -1682,6 +1682,7 @@ double find_split_std_gain_weighted(real_t *restrict x, real_t xmean, size_t ix_
     return best_gain;
 }
 
+
 #ifndef _FOR_R
 [[gnu::optimize("Ofast")]]
 #endif
@@ -1713,7 +1714,6 @@ static inline void axpy1(const double a, double *restrict xval, size_t ind[], si
 {
     for (size_t ix = 0; ix < nnz; ix++) y[ind[ix]] = std::fma(a, xval[ix], y[ind[ix]]);
 }
-
 
 template <class real_t, class ldouble_safe>
 double find_split_full_gain(real_t *restrict x, size_t st, size_t end, size_t *restrict ix_arr,

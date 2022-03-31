@@ -1,7 +1,7 @@
 Package: isotree
 Type: Package
 Title: Isolation-Based Outlier Detection
-Version: 0.5.14
+Version: 0.5.15
 Authors@R: c(
   person(given="David", family="Cortes", role=c("aut", "cre", "cph"),
          email="david.cortes.rivera@gmail.com"),
@@ -40,7 +40,7 @@ LinkingTo: Rcpp
 VignetteBuilder: knitr
 RoxygenNote: 7.1.2
 NeedsCompilation: yes
-Packaged: 2022-02-13 05:27:44 UTC; david
+Packaged: 2022-03-28 19:58:04 UTC; david
 Author: David Cortes [aut, cre, cph],
   Thibaut Goetghebuer-Planchon [cph] (Copyright holder of included
     robinmap library),
@@ -48,4 +48,4 @@ Author: David Cortes [aut, cre, cph],
   Sebastiano Vigna [cph] (Copyright holder of original xoshiro code),
   NumPy Developers [cph] (Copyright holder of formatted ziggurat tables)
 Repository: CRAN
-Date/Publication: 2022-02-13 19:00:06 UTC
+Date/Publication: 2022-03-31 10:40:02 UTC
