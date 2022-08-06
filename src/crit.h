@@ -1715,6 +1715,7 @@ static inline void axpy1(const double a, double *restrict xval, size_t ind[], si
     for (size_t ix = 0; ix < nnz; ix++) y[ind[ix]] = std::fma(a, xval[ix], y[ind[ix]]);
 }
 
+
 template <class real_t, class ldouble_safe>
 double find_split_full_gain(real_t *restrict x, size_t st, size_t end, size_t *restrict ix_arr,
                             size_t *restrict cols_use, size_t ncols_use, bool force_cols_use,
