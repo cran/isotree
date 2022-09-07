@@ -1683,38 +1683,25 @@ double find_split_std_gain_weighted(real_t *restrict x, real_t xmean, size_t ix_
 }
 
 
-#ifndef _FOR_R
-[[gnu::optimize("Ofast")]]
-#endif
 static inline void xpy1(double *restrict x, double *restrict y, size_t n)
 {
     for (size_t ix = 0; ix < n; ix++) y[ix] += x[ix];
 }
 
-#ifndef _FOR_R
-[[gnu::optimize("Ofast")]]
-#endif
 static inline void axpy1(const double a, double *restrict x, double *restrict y, size_t n)
 {
     for (size_t ix = 0; ix < n; ix++) y[ix] = std::fma(a, x[ix], y[ix]);
 }
 
-#ifndef _FOR_R
-[[gnu::optimize("Ofast")]]
-#endif
 static inline void xpy1(double *restrict xval, size_t ind[], size_t nnz, double *restrict y)
 {
     for (size_t ix = 0; ix < nnz; ix++) y[ind[ix]] += xval[ix];
 }
 
-#ifndef _FOR_R
-[[gnu::optimize("Ofast")]]
-#endif
 static inline void axpy1(const double a, double *restrict xval, size_t ind[], size_t nnz, double *restrict y)
 {
     for (size_t ix = 0; ix < nnz; ix++) y[ind[ix]] = std::fma(a, xval[ix], y[ind[ix]]);
 }
-
 
 template <class real_t, class ldouble_safe>
 double find_split_full_gain(real_t *restrict x, size_t st, size_t end, size_t *restrict ix_arr,

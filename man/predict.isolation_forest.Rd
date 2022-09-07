@@ -11,6 +11,7 @@
   square_mat = ifelse(type == "kernel", TRUE, FALSE),
   refdata = NULL,
   use_reference_points = TRUE,
+  nthreads = object$nthreads,
   ...
 )
 }
@@ -90,6 +91,12 @@ points instead of the pairwise distances between points in `newdata`.
 This is ignored when passing `refdata` or when the model object does not contain an indexer
 or the indexer does not contain reference points.}
 
+\item{nthreads}{Number of parallel threads to use. \bold{Note:} for better performance, it's recommended to set the number of
+threads to the number of \bold{physical} CPU cores, which in a typical desktop CPU, corresponds to half the number of threads
+(see details for more information).
+
+Shorthand for best performance: `nthreads = RhpcBLASctl::get_num_cores()`}
+
 \item{...}{Not used.}
 }
 \value{
@@ -142,7 +149,7 @@ For multi-threaded predictions on many rows, it is recommended to set the number
 to the number of physical cores of the CPU rather than the number of logical cores, as it
 will typically have better performance that way. Assuming a typical x86-64 desktop CPU,
 this typically involves dividing the number of threads by 2 - for example:
-`model$nthreads <- parallel::detectCores()/2`
+`model$nthreads <- RhpcBLASctl::get_num_cores()`
 
 Outlierness predictions for sparse data will be much slower than for dense data. Not recommended to pass
 sparse matrices unless they are too big to fit in memory.
