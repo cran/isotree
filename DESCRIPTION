@@ -1,7 +1,7 @@
 Package: isotree
 Type: Package
 Title: Isolation-Based Outlier Detection
-Version: 0.5.20
+Version: 0.5.22
 Authors@R: c(
   person(given="David", family="Cortes", role=c("aut", "cre", "cph"),
          email="david.cortes.rivera@gmail.com"),
@@ -44,9 +44,9 @@ Suggests: MASS, outliertree, jsonlite (>= 1.7.3), mlbench, MLmetrics,
 Enhances: Matrix, SparseM
 LinkingTo: Rcpp
 VignetteBuilder: knitr
-RoxygenNote: 7.2.1
+RoxygenNote: 7.2.3
 NeedsCompilation: yes
-Packaged: 2023-05-22 20:47:54 UTC; david
+Packaged: 2023-07-28 20:23:34 UTC; david
 Author: David Cortes [aut, cre, cph],
   Thibaut Goetghebuer-Planchon [cph] (Copyright holder of included
     robinmap library),
@@ -60,4 +60,4 @@ Author: David Cortes [aut, cre, cph],
   Stephen Moshier [cph] (Copyright holder of parts of digamma
     implementation)
 Repository: CRAN
-Date/Publication: 2023-05-23 07:10:08 UTC
+Date/Publication: 2023-08-07 16:00:02 UTC
