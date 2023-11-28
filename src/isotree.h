@@ -109,14 +109,12 @@
     extern "C" {
         #include <R_ext/Print.h>
     }
-    #define printf Rprintf
     #define fprintf(f, message) REprintf(message)
 #elif defined(_FOR_PYTHON)
-    extern "C" void cy_warning(const char *msg);
+    extern "C" int cy_warning(const char *msg);
     #define fprintf(f, message) cy_warning(message)
 #else
     #include <cstdio>
-    using std::printf;
     using std::fprintf;
 #endif
 #ifdef _OPENMP
@@ -265,6 +263,19 @@ using std::memcpy;
             #define ISOTREE_EXPORTED 
         #endif
     #endif
+#endif
+
+#ifndef unreachable
+#   if (__cplusplus >= 202309L)
+#       include <utility>
+        using std::unreachable;
+#   elif defined(_MSC_VER)
+#       define unreachable() (__assume(false))
+#   elif defined(__GNUC__) || defined(__clang__)
+#       define unreachable() __builtin_unreachable()
+#   else
+#       define unreachable() 
+#   endif
 #endif
 
 
