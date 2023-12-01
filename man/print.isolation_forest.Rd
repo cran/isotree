@@ -19,9 +19,8 @@ Displays the most general characteristics of an isolation forest model (same as 
 }
 \details{
 Note that after loading a serialized object from `isolation.forest` through `readRDS` or `load`,
-when using `lazy_serialization=FALSE`, it will only de-serialize the underlying C++ object upon running `predict`,
-`print`, or `summary`, so the first run will be slower, while subsequent runs will be faster as the C++ object
-will already be in-memory. This does not apply when using `lazy_serialization=TRUE`.
+it will only de-serialize the underlying C++ object upon running `predict`, `print`, or `summary`,
+so the first run will be slower, while subsequent runs will be faster as the C++ object will already be in-memory.
 }
 \seealso{
 \link{isolation.forest}
