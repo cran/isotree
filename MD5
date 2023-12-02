@@ -1,4 +1,4 @@
-3ba359cac934cd06d475fd2cad4cda09 *DESCRIPTION
+e6a44e8793f66ac07dc3fef66038986d *DESCRIPTION
 c5375be26dccf422d432b7afb86d27e6 *LICENSE
 e75b3607c81ee16777a1e20b5f1fd7a7 *NAMESPACE
 a7977543338924276746d62d284dd11c *R/RcppExports.R
@@ -48,7 +48,7 @@ eb1480c4f852f4bb6cba5c67b9f8fa69 *src/helpers_iforest.h
 0fe32adb35b352d95a7cf2224bf4ec26 *src/instantiate_template_headers.h
 9b7044222bb218343b5973e91e17a225 *src/isoforest.h
 c627c87ed047457c704c5344c36a8bc8 *src/isotree-win.def
-98def65c0373ecbdece69880cdd63f5b *src/isotree.h
+7bd283c61e6ad270c38276ea3c263c13 *src/isotree.h
 c34a6d559b31217492e56cbcb9d54adb *src/merge_models.cpp
 9de09cd2d65cdf21e4302862185f5f91 *src/mult.h
 f888fb556b548b4cd823e720c61dc65d *src/other_helpers.h

@@ -109,8 +109,7 @@
     extern "C" {
         #include <R_ext/Print.h>
     }
-    #define printf Rprintf
-    #define fprintf(f, message) REprintf(message)
+    #define fprintf(f, message) REprintf("%s", message)
 #elif defined(_FOR_PYTHON)
     extern "C" void cy_warning(const char *msg);
     #define fprintf(f, message) cy_warning(message)
