@@ -40,7 +40,7 @@
 *          International Conference on Knowledge Discovery & Data Mining. 2018.
 * 
 *     BSD 2-Clause License
-*     Copyright (c) 2019-2022, David Cortes
+*     Copyright (c) 2019-2024, David Cortes
 *     All rights reserved.
 *     Redistribution and use in source and binary forms, with or without
 *     modification, are permitted provided that the following conditions are met:
@@ -74,6 +74,7 @@
    run faster. After that, could also do a manual tree leaves unroll within each
    batch with stack-assigned variables for an even faster prediction function. */
 
+/* TODO: add 'const' qualifiers to all data inputs here. */
 
 /* Predict outlier score, average depth, or terminal node numbers
 * 
@@ -278,27 +279,48 @@ void predict_iforest(real_t *restrict numeric_data, int *restrict categ_data,
 
         else
         {
+            bool threw_exception = false;
+            std::exception_ptr ex = NULL;
+
             #pragma omp parallel for if(nrows > 1) schedule(static) num_threads(nthreads) \
-                    shared(nrows, model_outputs, prediction_data, output_depths, tree_num, per_tree_depths)
+                    shared(nrows, model_outputs, prediction_data, output_depths, tree_num, per_tree_depths, threw_exception, ex)
             for (size_t_for row = 0; row < (decltype(row))nrows; row++)
             {
+                if (threw_exception) continue;
                 double score = 0;
-                for (size_t tree = 0; tree < model_outputs->trees.size(); tree++)
+                try
                 {
-                    score += traverse_itree(model_outputs->trees[tree],
-                                            *model_outputs,
-                                            prediction_data,
-                                            (std::vector<ImputeNode>*)NULL,
-                                            (ImputedData<sparse_ix, double>*)NULL,
-                                            (double)0,
-                                            (size_t) row,
-                                            (tree_num == NULL)? NULL : (tree_num + nrows * tree),
-                                            (per_tree_depths == NULL)?
-                                                NULL : (per_tree_depths + tree + row*model_outputs->trees.size()),
-                                            (size_t) 0);
+                    for (size_t tree = 0; tree < model_outputs->trees.size(); tree++)
+                    {
+                        score += traverse_itree(model_outputs->trees[tree],
+                                                *model_outputs,
+                                                prediction_data,
+                                                (std::vector<ImputeNode>*)NULL,
+                                                (ImputedData<sparse_ix, double>*)NULL,
+                                                (double)0,
+                                                (size_t) row,
+                                                (tree_num == NULL)? NULL : (tree_num + nrows * tree),
+                                                (per_tree_depths == NULL)?
+                                                    NULL : (per_tree_depths + tree + row*model_outputs->trees.size()),
+                                                (size_t) 0);
+                    }
+                    output_depths[row] = score;
                 }
-                output_depths[row] = score;
+                catch (...)
+                {
+                    #pragma omp critical
+                    {
+                        if (!threw_exception)
+                        {
+                            threw_exception = true;
+                            ex = std::current_exception();
+                        }
+                    }
+                }
             }
+
+            if (threw_exception)
+                std::rethrow_exception(ex);
         }
     }
     
@@ -686,7 +708,7 @@ double traverse_itree(std::vector<IsoTree>     &tree,
                       size_t                   row,
                       sparse_ix *restrict      tree_num,
                       double *restrict         tree_depth,
-                      size_t                   curr_lev) noexcept
+                      size_t                   curr_lev)
 {
     double xval;
     int    cval;
@@ -763,6 +785,7 @@ double traverse_itree(std::vector<IsoTree>     &tree,
                         {
                             case Divide:
                             {
+                                if (tree_num || tree_depth) throw_unsupported_pred_error();
                                 return
                                     tree[curr_lev].pct_tree_left
                                         * traverse_itree(tree, model_outputs, prediction_data,
@@ -812,6 +835,7 @@ double traverse_itree(std::vector<IsoTree>     &tree,
                         {
                             case Divide:
                             {
+                                if (tree_num || tree_depth) throw_unsupported_pred_error();
                                 return
                                     tree[curr_lev].pct_tree_left
                                         * traverse_itree(tree, model_outputs, prediction_data,
@@ -872,6 +896,7 @@ double traverse_itree(std::vector<IsoTree>     &tree,
 
                                             case Weighted:
                                             {
+                                                if (tree_num || tree_depth) throw_unsupported_pred_error();
                                                 return
                                                     tree[curr_lev].pct_tree_left
                                                         * traverse_itree(tree, model_outputs, prediction_data,
@@ -927,6 +952,7 @@ double traverse_itree(std::vector<IsoTree>     &tree,
                                                     ||
                                                 tree[curr_lev].cat_split[cval] == (-1))
                                             {
+                                                if (tree_num || tree_depth) throw_unsupported_pred_error();
                                                 return
                                                     tree[curr_lev].pct_tree_left
                                                         * traverse_itree(tree, model_outputs, prediction_data,
@@ -1359,10 +1385,10 @@ void batched_csc_predict(PredictionData<real_t, sparse_ix> &prediction_data, int
                 }
             }
         }
-
-        if (threw_exception)
-            std::rethrow_exception(ex);
     }
+
+    if (threw_exception)
+        std::rethrow_exception(ex);
 
     #ifdef _OPENMP
     if (nthreads <= 1)
@@ -1584,6 +1610,7 @@ void traverse_itree_csc(WorkerForPredictCSC   &workspace,
 
             if (end_NA > workspace.st)
             {
+                if (st_NA < end_NA && (tree_num || per_tree_depths)) throw_unsupported_pred_error();
                 workspace.end = end_NA - 1;
                 for (size_t row = st_NA; row < end_NA; row++)
                     workspace.weights_arr[workspace.ix_arr[row]] *= trees[curr_tree].pct_tree_left;
@@ -1599,6 +1626,7 @@ void traverse_itree_csc(WorkerForPredictCSC   &workspace,
 
             if (st_NA <= orig_end)
             {
+                if (st_NA < end_NA && (tree_num || per_tree_depths)) throw_unsupported_pred_error();
                 workspace.st = st_NA;
                 workspace.end = orig_end;
                 if (weights_arr.size())
@@ -1758,12 +1786,12 @@ void traverse_hplane_csc(WorkerForPredictCSC      &workspace,
 }
 
 template <class PredictionData>
-void add_csc_range_penalty(WorkerForPredictCSC  &workspace,
-                           PredictionData       &prediction_data,
-                           double *restrict     weights_arr,
-                           size_t               col_num,
-                           double               range_low,
-                           double               range_high)
+void add_csc_range_penalty(WorkerForPredictCSC     &workspace,
+                           const PredictionData    &prediction_data,
+                           const double *restrict  weights_arr,
+                           size_t                  col_num,
+                           double                  range_low,
+                           double                  range_high)
 {
     std::sort(workspace.ix_arr.begin() + workspace.st, workspace.ix_arr.begin() + workspace.end + 1);
 
@@ -1860,10 +1888,17 @@ void add_csc_range_penalty(WorkerForPredictCSC  &workspace,
     }
 }
 
-template <class PredictionData>
-double extract_spC(PredictionData &prediction_data, size_t row, size_t col_num) noexcept
+void throw_unsupported_pred_error()
 {
-    decltype(prediction_data.Xc_indptr)
+    throw std::runtime_error(
+        "Cannot predict per-tree depths or indices for missing data with 'missing_action=divide' or new categories with 'new_categ_action=weighted'."
+    );
+}
+
+template <class PredictionData>
+double extract_spC(const PredictionData &prediction_data, size_t row, size_t col_num) noexcept
+{
+    const decltype(prediction_data.Xc_indptr)
                search_res = std::lower_bound(prediction_data.Xc_ind + prediction_data.Xc_indptr[col_num],
                                              prediction_data.Xc_ind + prediction_data.Xc_indptr[col_num + 1],
                                              row);
@@ -1878,11 +1913,13 @@ double extract_spC(PredictionData &prediction_data, size_t row, size_t col_num) 
 }
 
 template <class PredictionData, class sparse_ix>
-static inline double extract_spR(PredictionData &prediction_data, sparse_ix *row_st, sparse_ix *row_end, size_t col_num, size_t lb, size_t ub) noexcept
+static inline double extract_spR(const PredictionData &prediction_data,
+                                 const sparse_ix *row_st, const sparse_ix *row_end,
+                                 size_t col_num, size_t lb, size_t ub) noexcept
 {
     if (row_end == row_st || col_num < lb || col_num > ub)
         return 0.;
-    sparse_ix *search_res = std::lower_bound(row_st, row_end, (sparse_ix) col_num);
+    const sparse_ix *search_res = std::lower_bound(row_st, row_end, (sparse_ix) col_num);
     if (search_res == row_end || *search_res != (sparse_ix)col_num)
         return 0.;
     else
@@ -1890,11 +1927,11 @@ static inline double extract_spR(PredictionData &prediction_data, sparse_ix *row
 }
 
 template <class PredictionData, class sparse_ix>
-double extract_spR(PredictionData &prediction_data, sparse_ix *row_st, sparse_ix *row_end, size_t col_num) noexcept
+double extract_spR(const PredictionData &prediction_data, const sparse_ix *row_st, const sparse_ix *row_end, size_t col_num) noexcept
 {
     if (row_end == row_st)
         return 0.;
-    sparse_ix *search_res = std::lower_bound(row_st, row_end, (sparse_ix) col_num);
+    const sparse_ix *search_res = std::lower_bound(row_st, row_end, (sparse_ix) col_num);
     if (search_res == row_end || *search_res != (sparse_ix)col_num)
         return 0.;
     else
@@ -1902,14 +1939,14 @@ double extract_spR(PredictionData &prediction_data, sparse_ix *row_st, sparse_ix
 }
 
 template <class sparse_ix>
-void get_num_nodes(IsoForest &model_outputs, sparse_ix *restrict n_nodes, sparse_ix *restrict n_terminal, int nthreads) noexcept
+void get_num_nodes(const IsoForest &model_outputs, sparse_ix *restrict n_nodes, sparse_ix *restrict n_terminal, int nthreads) noexcept
 {
     std::fill(n_terminal, n_terminal + model_outputs.trees.size(), 0);
     #pragma omp parallel for schedule(static) num_threads(nthreads) shared(model_outputs, n_nodes, n_terminal)
     for (size_t_for tree = 0; tree < (decltype(tree))model_outputs.trees.size(); tree++)
     {
         n_nodes[tree] = model_outputs.trees[tree].size();
-        for (IsoTree &node : model_outputs.trees[tree])
+        for (const IsoTree &node : model_outputs.trees[tree])
         {
             n_terminal[tree] += (node.tree_left == 0);
         }
@@ -1917,14 +1954,14 @@ void get_num_nodes(IsoForest &model_outputs, sparse_ix *restrict n_nodes, sparse
 }
 
 template <class sparse_ix>
-void get_num_nodes(ExtIsoForest &model_outputs, sparse_ix *restrict n_nodes, sparse_ix *restrict n_terminal, int nthreads) noexcept
+void get_num_nodes(const ExtIsoForest &model_outputs, sparse_ix *restrict n_nodes, sparse_ix *restrict n_terminal, int nthreads) noexcept
 {
     std::fill(n_terminal, n_terminal + model_outputs.hplanes.size(), 0);
     #pragma omp parallel for schedule(static) num_threads(nthreads) shared(model_outputs, n_nodes, n_terminal)
     for (size_t_for hplane = 0; hplane <(decltype(hplane)) model_outputs.hplanes.size(); hplane++)
     {
         n_nodes[hplane] = model_outputs.hplanes[hplane].size();
-        for (IsoHPlane &node : model_outputs.hplanes[hplane])
+        for (const IsoHPlane &node : model_outputs.hplanes[hplane])
         {
             n_terminal[hplane] += (node.hplane_left == 0);
         }

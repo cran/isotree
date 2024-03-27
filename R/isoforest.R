@@ -1,6 +1,8 @@
 #' @importFrom parallel detectCores
-#' @importFrom stats predict
+#' @importFrom stats predict variable.names
 #' @importFrom utils head
+#' @importFrom methods new
+#' @importFrom jsonlite fromJSON toJSON write_json
 #' @importFrom Rcpp evalCpp
 #' @useDynLib isotree, .registration=TRUE
 
@@ -50,7 +52,8 @@
 #' 
 #' If the data has categorical variables and these are more important important for determining
 #' outlierness compared to numerical columns, one might want to experiment with `ndim=1`,
-#' `categ_split_type="single_categ"`, and `scoring_metric="density"`.
+#' `categ_split_type="single_categ"`, and `scoring_metric="density"`; while for all-numeric
+#' datasets - especially if there are missing values - one might want to experiment with `ndim=2` or `ndim=3`.
 #' 
 #' For small datasets, one might also want to experiment with `ndim=1`, `scoring_metric="adj_depth"`
 #' and `penalize_range=TRUE`.
@@ -79,21 +82,26 @@
 #' If the model is built with `nthreads>1`, the prediction function \link{predict.isolation_forest} will
 #' use OpenMP for parallelization. In a linux setup, one usually has GNU's "gomp" as OpenMP as backend, which
 #' will hang when used in a forked process - for example, if one tries to call this prediction function from
-#' `RestRserve`, which uses process forking for parallelization, it will cause the whole application to freeze;
-#' and if using kubernetes on top of a different backend such as plumber, might cause it to run slower than
-#' needed or to hang too. A potential fix in these cases is to set the number of threads to 1 in the object
-#' (e.g. `model$nthreads <- 1L`), or to use a different version of this library compiled without OpenMP
-#' (requires manually altering the `Makevars` file), or to use a non-GNU OpenMP backend. This should not
-#' be an issue when using this library normally in e.g. an RStudio session.
+#' `RestRserve`, which uses process forking for parallelization, it will cause the whole application to freeze.
+#' A potential fix in these cases is to pass `nthreads=1` to `predict`, or to set the number of threads to 1 in
+#' the model object (e.g. `model$nthreads <- 1L` or calling \link{isotree.set.nthreads}), or to compile this library
+#' without OpenMP (requires manually altering the `Makevars` file), or to use a non-GNU OpenMP backend (such
+#' as LLVM's 'libomp'. This should not be an issue when using this library normally in e.g. an RStudio session.
 #' 
-#' In order to make model objects serializable (i.e. usable with `save`, `saveRDS`, and similar), these model
-#' objects keep serialized raw bytes from which their underlying heap-allocated C++ object (which does not
-#' survive serializations) can be reconstructed. For model serving, one would usually want to drop these
+#' The R objects that hold the models contain heap-allocated C++ objects which do not map to R types and
+#' which thus do not survive serializations the same way R objects do.
+#' In order to make model objects serializable (i.e. usable with `save`, `saveRDS`, and similar), the package
+#' offers two mechanisms: (a) a 'lazy_serialization' option which uses the ALTREP system as a workaround,
+#' by defining classes with serialization methods but without datapointer methods (see the docs for
+#' `lazy_serialization` for more info); (b) a more theoretically correct way in which raw bytes are produced
+#' alongside the model and from which the C++ objects can be reconstructed. When using the lazy serialization
+#' system, C++ objects are restored automatically on load and the serialized bytes then discarded, but this is
+#' not the case when using the serialized bytes approach. For model serving, one would usually want to drop these
 #' serialized bytes after having loaded a model through `readRDS` or similar (note that reconstructing the
 #' C++ object will first require calling \link{isotree.restore.handle}, which is done automatically when
 #' calling `predict` and similar), as they can increase memory usage by a large amount. These redundant raw bytes
-#' can be dropped as follows: `model$cpp_obj$serialized <- NULL` (and an additional
-#' `model$cpp_obj$imp_ser <- NULL` when using `build_imputer=TRUE` and `model$cpp_obj$ind_ser <- NULL`
+#' can be dropped as follows: `model$cpp_objects$model$ser <- NULL` (and an additional
+#' `model$cpp_objects$imputer$ser <- NULL` when using `build_imputer=TRUE`, and `model$cpp_objects$indexer$ser <- NULL`
 #' when building a node indexer). After that, one might want to force garbage
 #' collection through `gc()`.
 #' 
@@ -701,6 +709,33 @@
 #' not be repeated, otherwise the column weights passed here will not end up matching. If passing a `data.frame`
 #' to `data`, will assume the column order is the same as in there, regardless of whether the entries passed to
 #' `column_weights` are named or not.
+#' @param lazy_serialization Whether to use a lazy serialization mechanism for the model C++ objects through
+#' the ALTREP system, which would only call the serialization and de-serialization methods when needed.
+#' 
+#' Passing 'TRUE' here has the following effects:\itemize{
+#' \item Fitting the model will not immediately trigger serialization of the model object, not will it
+#' need to allocate extra memory for the serialized bytes - instead, these serialized bytes will only
+#' get materialized when calling serialization functions such as `save` or `saveRDS`.
+#' \item The resulting object will not be possible to serialize with library 'qs' (`qs::qsave`), nor
+#' with other serialization libraries that do not work with R's ALTREP system.
+#' \item If restoring a session with saved objects or loading serialized models through `load`, if there
+#' is not enough memory to de-serialize the model object, this will be manifested as silent failures
+#' in which the object simply disappears from the environment without leaving any trace or error message.
+#' \item When reading a model through `readRDS`, if there's an error (such as 'insufficient memory'),
+#' it will fail to load the R object at all.
+#' \item Since this uses a workaround for which the ALTREP system was not initially designed, calling
+#' methods such as `str` on the resulting object will result in errors being displayed when it comes
+#' to the external pointer fields.
+#' }
+#' 
+#' If passing 'FALSE', on the other hand:\itemize{
+#' \item Immediately after fitting the model, this fitted model will be serialized into memory-contiguous
+#' raw bytes from which the C++ object can then be reconstructed.
+#' \item If the model gets de-serialized from a saved file (for example through 'load', 'readRDS', 'qs::qread',
+#' or by restarting R sessions), the underlying C++ model object will be lost, and as such will need to be
+#' restored (de-serialized from the serialized bytes) the first time a method like `predict` gets called on
+#' it (which means the first call will be slower and will result in additional memory allocations).
+#' }
 #' @param seed Seed that will be used for random number generation.
 #' @param use_long_double Whether to use 'long double' (extended precision) type for more precise calculations about
 #' standard deviations, means, ratios, weights, gain, and other potential aggregates. This makes
@@ -879,7 +914,7 @@
 #' X <- matrix(rnorm(m * n), nrow=m, ncol=n)
 #' 
 #' ### Fit isolation forest model
-#' iso <- isolation.forest(X, ntrees=100, nthreads=1)
+#' iso <- isolation.forest(X, ndim=2, ntrees=100, nthreads=1)
 #' 
 #' ### Calculate distances with the model
 #' ### (this can be accelerated with 'isotree.build.indexer')
@@ -910,11 +945,14 @@
 #'   X_na[values_NA] = NA
 #'   
 #'   ### Impute missing values with model
-#'   iso <- isolation.forest(X_na,
+#'   iso <- isolation.forest(
+#'       X_na,
 #'       build_imputer = TRUE,
 #'       prob_pick_pooled_gain = 1,
+#'       ndim = 2,
 #'       ntry = 10,
-#'       nthreads = 1)
+#'       nthreads = 1
+#'   )
 #'   X_imputed <- predict(iso, X_na, type = "impute")
 #'   cat(sprintf("MSE for imputed values w/model: %f\n",
 #'       mean((X[values_NA] - X_imputed[values_NA])^2)))
@@ -955,7 +993,7 @@
 #' }
 #' @export
 isolation.forest <- function(data,
-                             sample_size = min(nrow(data), 10000L), ntrees = 500, ndim = min(3, ncol(data)),
+                             sample_size = min(nrow(data), 10000L), ntrees = 500, ndim = 1,
                              ntry = 1, categ_cols = NULL,
                              max_depth = ceiling(log2(sample_size)),
                              ncols_per_tree = ncol(data),
@@ -975,7 +1013,9 @@ isolation.forest <- function(data,
                              depth_imp = "higher", weigh_imp_rows = "inverse",
                              output_score = FALSE, output_dist = FALSE, square_dist = FALSE,
                              sample_weights = NULL, column_weights = NULL,
-                             seed = 1, use_long_double = FALSE, nthreads = parallel::detectCores()) {
+                             lazy_serialization = TRUE,
+                             seed = 1, use_long_double = FALSE,
+                             nthreads = parallel::detectCores()) {
     ### validate inputs
     if (NROW(data) < 3L)
         stop("Input data has too few rows.")
@@ -1064,6 +1104,7 @@ isolation.forest <- function(data,
     check.is.bool(build_imputer)
     check.is.bool(output_imputations)
     check.is.bool(use_long_double)
+    check.is.bool(lazy_serialization)
     
     s <- prob_pick_avg_gain + prob_pick_pooled_gain + prob_pick_full_gain + prob_pick_dens
     if (s > 1) {
@@ -1223,6 +1264,7 @@ isolation.forest <- function(data,
     weigh_by_kurtosis        <-  as.logical(weigh_by_kurtosis)
     assume_full_distr        <-  as.logical(assume_full_distr)
     use_long_double          <-  as.logical(use_long_double)
+    lazy_serialization       <-  as.logical(lazy_serialization)
 
     ### split column types
     pdata <- process.data(data, sample_weights, column_weights, recode_categ, categ_cols)
@@ -1274,17 +1316,18 @@ isolation.forest <- function(data,
                              missing_action, all_perm,
                              build_imputer, output_imputations, min_imp_obs,
                              depth_imp, weigh_imp_rows,
-                             seed, use_long_double, nthreads)
+                             seed, use_long_double, nthreads, lazy_serialization)
     
-    if (cpp_outputs$err)
-        stop("Procedure was interrupted.")
-    
-    has_int_overflow = (
-        !NROW(cpp_outputs$serialized) ||
-        (build_imputer && !is.null(cpp_outputs$imp_ser) && !NROW(cpp_outputs$imp_ser))
-    )
-    if (has_int_overflow)
-        stop("Resulting model is too large for R to handle.")
+    if (cpp_outputs$err) stop("Failed to fit model.")
+
+    if (!lazy_serialization) {
+        has_int_overflow = (
+            !NROW(cpp_outputs$model$ser) ||
+            (build_imputer && !is.null(cpp_outputs$imputer$ser) && !NROW(cpp_outputs$imputer$ser))
+        )
+        if (has_int_overflow)
+            stop("Resulting model is too large for R to handle.")
+    }
     
     ### pack the outputs
     this <- list(
@@ -1327,13 +1370,10 @@ isolation.forest <- function(data,
         use_long_double  =  use_long_double,
         random_seed      =  seed,
         nthreads         =  nthreads,
-        cpp_obj      =  list(
-            ptr         =  cpp_outputs$ptr,
-            serialized  =  cpp_outputs$serialized,
-            imp_ptr     =  cpp_outputs$imp_ptr,
-            imp_ser     =  cpp_outputs$imp_ser,
-            indexer     =  get_null_R_pointer(),
-            ind_ser     =  raw()
+        cpp_objects      =  list(
+            model    =  cpp_outputs$model,
+            imputer  =  cpp_outputs$imputer,
+            indexer  =  cpp_outputs$indexer
         )
     )
     
@@ -1379,7 +1419,7 @@ isolation.forest <- function(data,
         if (output_imputations) {
             outp$imputed   <-  reconstruct.from.imp(cpp_outputs$imputed_num,
                                                     cpp_outputs$imputed_cat,
-                                                    data, this, pdata)
+                                                    data, this$metadata, pdata)
         }
         return(outp)
     }
@@ -1479,24 +1519,29 @@ isolation.forest <- function(data,
 #' (for output types `"dist"`, `"avg_sep"`, `"kernel"`, `"kernel_raw"`; with `use_reference_points=TRUE` and no `refdata`).
 #' \item The same type as the input `newdata` (for output type `"impute"`).}
 #' @section Model serving considerations:
-#' If the model was built with `nthreads>1`, this prediction function will
+#' If the model is built with `nthreads>1`, the prediction function \link{predict.isolation_forest} will
 #' use OpenMP for parallelization. In a linux setup, one usually has GNU's "gomp" as OpenMP as backend, which
 #' will hang when used in a forked process - for example, if one tries to call this prediction function from
-#' `RestRserve`, which uses process forking for parallelization, it will cause the whole application to freeze;
-#' and if using kubernetes on top of a different backend such as plumber, might cause it to run slower than
-#' needed or to hang too. A potential fix in these cases is to set the number of threads to 1 in the object
-#' (e.g. `model$nthreads <- 1L`), or to use a different version of this library compiled without OpenMP
-#' (requires manually altering the `Makevars` file), or to use a non-GNU OpenMP backend. This should not
-#' be an issue when using this library normally in e.g. an RStudio session.
+#' `RestRserve`, which uses process forking for parallelization, it will cause the whole application to freeze.
+#' A potential fix in these cases is to pass `nthreads=1` to `predict`, or to set the number of threads to 1 in
+#' the model object (e.g. `model$nthreads <- 1L` or calling \link{isotree.set.nthreads}), or to compile this library
+#' without OpenMP (requires manually altering the `Makevars` file), or to use a non-GNU OpenMP backend (such
+#' as LLVM's 'libomp'. This should not be an issue when using this library normally in e.g. an RStudio session.
 #' 
-#' In order to make model objects serializable (i.e. usable with `save`, `saveRDS`, and similar), these model
-#' objects keep serialized raw bytes from which their underlying heap-allocated C++ object (which does not
-#' survive serializations) can be reconstructed. For model serving, one would usually want to drop these
+#' The R objects that hold the models contain heap-allocated C++ objects which do not map to R types and
+#' which thus do not survive serializations the same way R objects do.
+#' In order to make model objects serializable (i.e. usable with `save`, `saveRDS`, and similar), the package
+#' offers two mechanisms: (a) a 'lazy_serialization' option which uses the ALTREP system as a workaround,
+#' by defining classes with serialization methods but without datapointer methods (see the docs for
+#' `lazy_serialization` for more info); (b) a more theoretically correct way in which raw bytes are produced
+#' alongside the model and from which the C++ objects can be reconstructed. When using the lazy serialization
+#' system, C++ objects are restored automatically on load and the serialized bytes then discarded, but this is
+#' not the case when using the serialized bytes approach. For model serving, one would usually want to drop these
 #' serialized bytes after having loaded a model through `readRDS` or similar (note that reconstructing the
 #' C++ object will first require calling \link{isotree.restore.handle}, which is done automatically when
 #' calling `predict` and similar), as they can increase memory usage by a large amount. These redundant raw bytes
-#' can be dropped as follows: `model$cpp_obj$serialized <- NULL` (and an additional
-#' `model$cpp_obj$imp_ser <- NULL` when using `build_imputer=TRUE` and `model$cpp_obj$ind_ser <- NULL`
+#' can be dropped as follows: `model$cpp_objects$model$ser <- NULL` (and an additional
+#' `model$cpp_objects$imputer$ser <- NULL` when using `build_imputer=TRUE`, and `model$cpp_objects$indexer$ser <- NULL`
 #' when building a node indexer). After that, one might want to force garbage
 #' collection through `gc()`.
 #' 
@@ -1541,8 +1586,10 @@ isolation.forest <- function(data,
 #' sparse matrices unless they are too big to fit in memory.
 #' 
 #' Note that after loading a serialized object from `isolation.forest` through `readRDS` or `load`,
-#' it will only de-serialize the underlying C++ object upon running `predict`, `print`, or `summary`, so the
+#' if it was constructed with `lazy_serialization=FALSE` it will only de-serialize the underlying
+#' C++ object upon running `predict`, `print`, or `summary`, so the
 #' first run will  be slower, while subsequent runs will be faster as the C++ object will already be in-memory.
+#' This does not apply when using `lazy_serialization=TRUE`.
 #' 
 #' In order to save memory when fitting and serializing models, the functionality for outputting
 #' terminal node numbers will generate index mappings on the fly for all tree nodes, even if passing only
@@ -1593,16 +1640,6 @@ predict.isolation_forest <- function(
     if (!NROW(newdata)) stop("'newdata' must be a data.frame, matrix, or sparse matrix.")
     if ((object$metadata$ncols_cat > 0 && is.null(object$metadata$categ_cols)) && NROW(intersect(class(newdata), get.types.spmat(TRUE, TRUE, TRUE)))) {
         stop("Cannot pass sparse inputs if the model was fit to categorical variables in a data.frame.")
-    }
-    if ((type %in% c("tree_num", "tree_depths")) && (object$params$ndim == 1L)) {
-        if ((object$metadata$ncols_cat > 0) &&
-            (object$params$categ_split_type != "single_categ") &&
-            (object$params$new_categ_action == "weighted")
-        ) {
-            stop("Cannot output tree numbers/depths when using 'new_categ_action' = 'weighted'.")
-        }
-        if (object$params$missing_action == "divide")
-            stop("Cannot output tree numbers/depths when using 'missing_action' = 'divide'.")
     }
     if (inherits(newdata, "numeric") && is.null(dim(newdata))) {
         newdata <- matrix(newdata, nrow=1)
@@ -1665,10 +1702,10 @@ predict.isolation_forest <- function(
                 colnames(dist_rmat)   <-  rnames[1:nobs_group1]
                 row.names(dist_rmat)  <-  rnames[seq(nobs_group1+1L, NROW(rnames))]
             }
-        } else if (use_reference_points && check_node_indexer_has_references(object$cpp_obj$indexer)) {
-            if (type %in% c("dist", "avg_sep") && !check_node_indexer_has_distances(object$cpp_obj$indexer))
+        } else if (use_reference_points && check_node_indexer_has_references(object$cpp_objects$indexer$ptr)) {
+            if (type %in% c("dist", "avg_sep") && !check_node_indexer_has_distances(object$cpp_objects$indexer$ptr))
                 stop("Model indexer was built without distances. Cannot calculate distances to reference points.")
-            dist_rmat <- matrix(0, ncol=pdata$nrows, nrow=get_num_references(object$cpp_obj$indexer))
+            dist_rmat <- matrix(0, ncol=pdata$nrows, nrow=get_num_references(object$cpp_objects$indexer$ptr))
             used_rmat <- TRUE
             if (NROW(object$metadata$reference_names)) row.names(dist_rmat) <- object$metadata$reference_names
             if (NROW(rnames)) colnames(dist_rmat) <- rnames
@@ -1687,16 +1724,17 @@ predict.isolation_forest <- function(
         if (NROW(rnames)) names(score_array) <- rnames
 
         if (type == "tree_num") {
-            tree_num <- get_empty_int_mat(pdata$nrows, get_ntrees(object$cpp_obj$ptr, object$params$ndim > 1))
+            tree_num <- get_empty_int_mat(pdata$nrows, get_ntrees(object$cpp_objects$model$ptr, object$params$ndim > 1))
             if (NROW(rnames)) row.names(tree_num) <- rnames
         } else if (type == "tree_depths") {
-            tree_depths <- matrix(0., ncol=pdata$nrows, nrow=get_ntrees(object$cpp_obj$ptr, object$params$ndim > 1))
+            tree_depths <- matrix(0., ncol=pdata$nrows, nrow=get_ntrees(object$cpp_objects$model$ptr, object$params$ndim > 1))
             if (NROW(rnames)) colnames(tree_depths) <- rnames
         }
     }
     
     if (type %in% c("score", "avg_depth", "tree_num", "tree_depths")) {
-        predict_iso(object$cpp_obj$ptr, object$params$ndim > 1, object$cpp_obj$indexer,
+        predict_iso(object$cpp_objects$model$ptr, object$params$ndim > 1L,
+                    object$cpp_objects$indexer$ptr,
                     score_array, tree_num, tree_depths,
                     pdata$X_num, pdata$X_cat,
                     pdata$Xc, pdata$Xc_ind, pdata$Xc_indptr,
@@ -1710,7 +1748,9 @@ predict.isolation_forest <- function(
             return(score_array)
         }
     } else if (type %in% c("dist", "avg_sep", "kernel", "kernel_raw")) {
-        dist_iso(object$cpp_obj$ptr, object$cpp_obj$indexer, dist_tmat, dist_dmat, dist_rmat,
+        dist_iso(object$cpp_objects$model$ptr,
+                 object$cpp_objects$indexer$ptr,
+                 dist_tmat, dist_dmat, dist_rmat,
                  object$params$ndim > 1L,
                  pdata$X_num, pdata$X_cat,
                  pdata$Xc, pdata$Xc_ind, pdata$Xc_indptr,
@@ -1735,27 +1775,29 @@ predict.isolation_forest <- function(
             return(dist_tmat)
         }
     } else if (type == "impute") {
-        imp <- impute_iso(object$cpp_obj$ptr, object$cpp_obj$imp_ptr, object$params$ndim > 1,
+        imp <- impute_iso(object$cpp_objects$model$ptr,
+                          object$cpp_objects$imputer$ptr,
+                          object$params$ndim > 1,
                           pdata$X_num, pdata$X_cat,
                           pdata$Xr, pdata$Xr_ind, pdata$Xr_indptr,
                           pdata$nrows, object$use_long_double, nthreads)
         return(reconstruct.from.imp(imp$X_num,
                                     imp$X_cat,
-                                    newdata, object,
+                                    newdata, object$metadata,
                                     pdata))
     } else {
         stop("Unexpected error. Please open an issue in GitHub explaining what you were doing.")
     }
 }
 
-
 #' @title Print summary information from Isolation Forest model
 #' @description Displays the most general characteristics of an isolation forest model (same as `summary`).
 #' @param x An Isolation Forest model as produced by function `isolation.forest`.
 #' @param ... Not used.
 #' @details Note that after loading a serialized object from `isolation.forest` through `readRDS` or `load`,
-#' it will only de-serialize the underlying C++ object upon running `predict`, `print`, or `summary`,
-#' so the first run will be slower, while subsequent runs will be faster as the C++ object will already be in-memory.
+#' when using `lazy_serialization=FALSE`, it will only de-serialize the underlying C++ object upon running `predict`,
+#' `print`, or `summary`, so the first run will be slower, while subsequent runs will be faster as the C++ object
+#' will already be in-memory. This does not apply when using `lazy_serialization=TRUE`.
 #' @return The same model that was passed as input.
 #' @seealso \link{isolation.forest}
 #' @export print.isolation_forest
@@ -1778,22 +1820,22 @@ print.isolation_forest <- function(x, ...) {
     cat(sprintf("Consisting of %d trees\n", x$params$ntrees))
     if (x$metadata$ncols_num  > 0)  cat(sprintf("Numeric columns: %d\n",     x$metadata$ncols_num))
     if (x$metadata$ncols_cat  > 0)  cat(sprintf("Categorical columns: %d\n", x$metadata$ncols_cat))
-    if (NROW(x$cpp_obj$ind_ser)) {
-        has_distances <- check_node_indexer_has_distances(x$cpp_obj$indexer)
-        has_references <- check_node_indexer_has_references(x$cpp_obj$indexer)
+    if (!check_null_ptr_model_internal(x$cpp_objects$indexer$ptr)) {
+        has_distances <- check_node_indexer_has_distances(x$cpp_objects$indexer$ptr)
+        has_references <- check_node_indexer_has_references(x$cpp_objects$indexer$ptr)
         cat(sprintf("(Has node indexer%s%s%s built-in)\n",
                     ifelse(has_distances, " with distances", ""),
                     ifelse(has_distances && has_references, " and", ""),
                     ifelse(has_references, " with reference points", "")))
     }
-    if (NROW(x$cpp_obj$serialized)) {
-        bytes <- length(x$cpp_obj$serialized) + NROW(x$cpp_obj$imp_ser) + NROW(x$cpp_obj$ind_ser)
+    if (NROW(x$cpp_objects$model$ser)) {
+        bytes <- length(x$cpp_objects$model$ser) + NROW(x$cpp_objects$imputer$ser) + NROW(x$cpp_objects$indexer$ser)
         if (bytes > 1024^3) {
-            cat(sprintf("Size: %.2f GiB\n", bytes/1024^3))
+            cat(sprintf("Serialized size: %.2f GiB\n", bytes/1024^3))
         } else if (bytes > 1024^2) {
-            cat(sprintf("Size: %.2f MiB\n", bytes/1024^2))
+            cat(sprintf("Serialized size: %.2f MiB\n", bytes/1024^2))
         } else {
-            cat(sprintf("Size: %.2f KiB\n", bytes/1024))
+            cat(sprintf("Serialized size: %.2f KiB\n", bytes/1024))
         }
     }
     return(invisible(x))
@@ -1805,8 +1847,9 @@ print.isolation_forest <- function(x, ...) {
 #' @param object An Isolation Forest model as produced by function `isolation.forest`.
 #' @param ... Not used.
 #' @details Note that after loading a serialized object from `isolation.forest` through `readRDS` or `load`,
-#' it will only de-serialize the underlying C++ object upon running `predict`, `print`, or `summary`,
-#' so the first run will be slower, while subsequent runs will be faster as the C++ object will already be in-memory.
+#' when using `lazy_serialization=FALSE`, it will only de-serialize the underlying C++ object upon running `predict`,
+#' `print`, or `summary`, so the first run will be slower, while subsequent runs will be faster as the C++ object
+#' will already be in-memory. This does not apply when using `lazy_serialization=TRUE`.
 #' @return No return value.
 #' @seealso \link{isolation.forest}
 #' @export summary.isolation_forest
@@ -1848,6 +1891,9 @@ summary.isolation_forest <- function(object, ...) {
 #' 
 #' For safety purposes, the model object can be deep copied (including the underlying C++ object)
 #' through function \link{isotree.deep.copy} before undergoing an in-place modification like this.
+#' 
+#' If this function is going to be called frequently, it's highly recommended to use `lazy_serialization=TRUE`
+#' as then it will not need to copy over serialized bytes.
 #' @seealso \link{isolation.forest} \link{isotree.restore.handle}
 #' @export
 isotree.add.tree <- function(model, data, sample_weights = NULL, column_weights = NULL, refdata = NULL) {
@@ -1861,11 +1907,11 @@ isotree.add.tree <- function(model, data, sample_weights = NULL, column_weights 
         stop("Resulting object would exceed number of trees limit.")
 
     if (is.null(refdata)) {
-        if (check_node_indexer_has_references(model$cpp_obj$indexer))
+        if (check_node_indexer_has_references(model$cpp_objects$indexer$ptr))
             stop(paste0("Must pass either pass 'X_ref' in order to maintain reference points in indexer,",
                         " or drop reference points through 'isotree.drop.reference.points'."))
     } else {
-        if (!check_node_indexer_has_references(model$cpp_obj$indexer))
+        if (!check_node_indexer_has_references(model$cpp_objects$indexer$ptr))
             warning("Passed 'refdata', but model object has no reference points. Will be ignored.")
         refdata <- NULL
     }
@@ -1913,35 +1959,33 @@ isotree.add.tree <- function(model, data, sample_weights = NULL, column_weights 
         )
     } else {
         ref_pdata <- process.data.new(refdata, model$metadata, allow_csr=FALSE, allow_csc=TRUE)
-        expected_nref <- get_num_references(model$cpp_obj$indexer)
+        expected_nref <- get_num_references(model$cpp_objects$indexer$ptr)
         if (ref_pdata$nrows != expected_nref) {
             stop(sprintf("'refdata' as %d rows, but previous reference data had %d rows.",
                          ref_pdata$nrows, expected_nref))
         }
     }
 
-    serialized <- raw()
-    if (NROW(model$cpp_obj$serialized))
-        serialized <- model$cpp_obj$serialized
+    model_ser <- raw()
+    imputer_ser <- raw()
+    indexer_ser <- raw()
 
-    imp_ser <- raw()
-    if (NROW(model$cpp_obj$imp_ser))
-        imp_ser    <- model$cpp_obj$imp_ser
+    is_altrepped <- check_is_altrepped_ptr(model$cpp_objects$model)
+    if (!is_altrepped) {
+        if (NROW(model$cpp_objects$model$ser))
+            model_ser    <-  model$cpp_objects$model$ser
+        if (NROW(model$cpp_objects$imputer$ser))
+            imputer_ser  <-  model$cpp_objects$imputer$ser
+        if (NROW(model$cpp_objects$indexer$ser))
+            indexer_ser  <-  model$cpp_objects$indexer$ser
+    }
 
     fast_bratio <- model$params$fast_bratio
     if (is.null(fast_bratio))
         fast_bratio <- TRUE
 
-    indexer <- NULL
-    if (!is.null(model$cpp_obj$indexer))
-        indexer <- model$cpp_obj$indexer
-
-    ind_ser <- raw()
-    if (NROW(model$cpp_obj$ind_ser))
-        ind_ser <- model$cpp_obj$ind_ser
-
-    fit_tree(model$cpp_obj$ptr, serialized, imp_ser,
-             indexer, ind_ser,
+    fit_tree(model$cpp_objects$model$ptr, model_ser, imputer_ser,
+             model$cpp_objects$indexer$ptr, indexer_ser,
              pdata$X_num, pdata$X_cat, unname(ncat),
              pdata$Xc, pdata$Xc_ind, pdata$Xc_indptr,
              sample_weights, column_weights,
@@ -1960,94 +2004,154 @@ isotree.add.tree <- function(model, data, sample_weights = NULL, column_weights 
              model$params$min_gain,
              model$params$categ_split_type, model$params$new_categ_action,
              model$params$missing_action, model$params$build_imputer,
-             model$params$min_imp_obs, model$cpp_obj$imp_ptr,
+             model$params$min_imp_obs, model$cpp_objects$imputer$ptr,
              model$params$depth_imp, model$params$weigh_imp_rows,
              model$params$all_perm,
              ref_pdata$X_num, ref_pdata$X_cat,
              ref_pdata$Xc, ref_pdata$Xc_ind, ref_pdata$Xc_indptr,
              model$random_seed + (model$params$ntrees-1L),
              model$use_long_double,
-             model$cpp_obj, model$params)
+             model$cpp_objects, model$params, is_altrepped)
     
     return(invisible(model))
+}
+
+check_is_altrepped_ptr <- function(ptr) {
+    return(inherits(ptr, "isotree_altrepped_handle"))
 }
 
 #' @title Unpack isolation forest model after de-serializing
 #' @description After persisting an isolation forest model object through `saveRDS`, `save`, or restarting a session, the
 #' underlying C++ objects that constitute the isolation forest model and which live only on the C++ heap memory are not saved along,
-#' thus not restored after loading a saved model through `readRDS` or `load`.
+#' and depending on parameter `lazy_serialization`, might not get automatically restored after loading a saved model through
+#' `readRDS` or `load`.
 #' 
 #' The model object however keeps serialized versions of the C++ objects as raw bytes, from which the C++ objects can be
-#' reconstructed, and are done so automatically after calling `predict`, `print`, `summary`, or `isotree.add.tree` on the
+#' reconstructed, and are done so automatically upon de-serialization when using `lazy_serialization=TRUE`, but otherwise,
+#' the C++ objects will only get de-serialized after calling `predict`, `print`, `summary`, or `isotree.add.tree` on the
 #' freshly-loaded object from `readRDS` or `load`.
 #' 
 #' This function allows to automatically de-serialize the object ("complete" or "restore" the
-#' handle) without having to call any function that would do extra processing.
-#' It is an equivalent to XGBoost's `xgb.Booster.complete` and CatBoost's
-#' `catboost.restore_handle` functions.
+#' handle) without having to call any function that would do extra processing when one uses `lazy_serialization=FALSE`
+#' (calling the function is \bold{not} needed when using `lazy_serialization=TRUE`).
+#' 
+#' It is an analog to XGBoost's `xgb.Booster.complete` and CatBoost's `catboost.restore_handle` functions.
+#' 
+#' If the model was buit with `lazy_serialization=TRUE`, this function will not do anything to the object.
 #' @details If using this function to de-serialize a model in a production system, one might
 #' want to delete the serialized bytes inside the object afterwards in order to free up memory.
-#' These are under `model$cpp_obj$serialized` (plus `model$cpp_obj$imp_ser` if building with imputer)
-#' - e.g.: `model$cpp_obj$serialized = NULL; model$cpp_obj$imp_ser = NULL; gc()`.
+#' These are under `model$cpp_objects$(model,imputer,indexer)$ser`
+#' - e.g.: `model$cpp_objects$model$ser = NULL; gc()`.
 #' @param model An Isolation Forest object as returned by `isolation.forest`, which has been just loaded from a disk
-#' file through `readRDS`, `load`, or a session restart.
+#' file through `readRDS`, `load`, or a session restart, and which was constructed with `lazy_serialization=FALSE`.
 #' @return The same model object that was passed as input. Object is modified in-place
 #' however, so it does not need to be re-assigned.
 #' @examples 
 #' ### Warning: this example will generate a temporary .Rds
 #' ### file in your temp folder, and will then delete it
+#' 
+#' ### First, create a model from random data
 #' library(isotree)
 #' set.seed(1)
 #' X <- matrix(rnorm(100), nrow = 20)
-#' iso <- isolation.forest(X, ntrees=10, nthreads=1)
+#' iso <- isolation.forest(X, ntrees=10, nthreads=1, lazy_serialization=FALSE)
+#' 
+#' ### Now serialize the model
 #' temp_file <- file.path(tempdir(), "iso.Rds")
 #' saveRDS(iso, temp_file)
 #' iso2 <- readRDS(temp_file)
 #' file.remove(temp_file)
 #' 
 #' cat("Model pointer after loading is this: \n")
-#' print(iso2$cpp_obj$ptr)
+#' print(iso2$cpp_objects$model$ptr)
 #' 
 #' ### now unpack it
 #' isotree.restore.handle(iso2)
 #' 
 #' cat("Model pointer after unpacking is this: \n")
-#' print(iso2$cpp_obj$ptr)
+#' print(iso2$cpp_objects$model$ptr)
+#' 
+#' ### Note that this function is not needed when using lazy_serialization=TRUE
+#' iso_lazy <- isolation.forest(X, ntrees=10, nthreads=1, lazy_serialization=TRUE)
+#' temp_file_lazy <- file.path(tempdir(), "iso_lazy.Rds")
+#' saveRDS(iso_lazy, temp_file_lazy)
+#' iso_lazy2 <- readRDS(temp_file_lazy)
+#' file.remove(temp_file_lazy)
+#' cat("Model pointer after unpacking lazy-serialized: \n")
+#' print(iso_lazy2$cpp_objects$model$ptr)
 #' @export
 isotree.restore.handle <- function(model)  {
     if (!inherits(model, "isolation_forest"))
         stop("'model' must be an isolation forest model object as output by function 'isolation.forest'.")
     
-    if (check_null_ptr_model(model$cpp_obj$ptr)) {
-        if (!NROW(model$cpp_obj$serialized))
-            stop("'model' is missing serialized raw bytes. Cannot restore handle.")
-
-        if (model$params$ndim == 1)
-            set.list.elt(model$cpp_obj, "ptr", deserialize_IsoForest(model$cpp_obj$serialized))
-        else
-            set.list.elt(model$cpp_obj, "ptr", deserialize_ExtIsoForest(model$cpp_obj$serialized))
+    if (is.null(model$cpp_objects)) {
+        if (!is.null(model$cpp_obj)) {
+            convert.from.old.format.to.new(model)
+        } else {
+            stop("'model' object is corrupted or invalid.")
+        }
     }
 
-    if (model$params$build_imputer && check_null_ptr_model(model$cpp_obj$imp_ptr)) {
-        if (!NROW(model$cpp_obj$imp_ser))
-            stop("'model' is missing serialized raw bytes. Cannot restore handle.")
-        if (!("imp_ptr" %in% names(model$cpp_obj)))
-            set.list.elt(model$cpp_obj, "imp_ptr", get_null_R_pointer())
-
-        set.list.elt(model$cpp_obj, "imp_ptr", deserialize_Imputer(model$cpp_obj$imp_ser))
+    if (!inherits(model$cpp_objects$model, "isotree_altrepped_handle")) {
+        restore.handles.new.format(model)
     }
 
-    if (NROW(model$cpp_obj$ind_ser) && (is.null(model$cpp_obj$indexer) || check_null_ptr_model(model$cpp_obj$indexer))) {
-        if (!("indexer" %in% names(model$cpp_obj)))
-            set.list.elt(model$cpp_obj, "indexer", get_null_R_pointer())
-        set.list.elt(model$cpp_obj, "indexer", deserialize_Indexer(model$cpp_obj$ind_ser))
-    }
-
-    if (is.null(model$use_long_double)) {
-        set.list.elt(model, "use_long_double", FALSE)
-    }
-    
+    check.valid.handles(model)
     return(invisible(model))
+}
+
+check.blank.pointer <- function(ptr) {
+    return(
+        !inherits(ptr, "externalptr") ||
+        check_null_ptr_model_internal(ptr)
+    )
+}
+
+check.valid.ser <- function(ser) {
+    if (!NROW(ser) || !is.raw(ser)) {
+        stop("'model' has invalid serialized bytes. Cannot restore handle.")
+    }
+}
+
+restore.handles.new.format <- function(model) {
+    if (check.blank.pointer(model$cpp_objects$model$ptr)) {
+        check.valid.ser(model$cpp_objects$model$ser)
+        if (model$params$ndim == 1)
+            set.list.elt(model$cpp_objects$model, "ptr", deserialize_IsoForest(model$cpp_objects$model$ser))
+        else
+            set.list.elt(model$cpp_objects$model, "ptr", deserialize_ExtIsoForest(model$cpp_objects$model$ser))
+    }
+
+    if (model$params$build_imputer) {
+        if (check.blank.pointer(model$cpp_objects$imputer$ptr)) {
+            check.valid.ser(model$cpp_objects$imputer$ser)
+            set.list.elt(model$cpp_objects$imputer, "ptr", deserialize_Imputer(model$cpp_objects$imputer$ser))
+        }
+    }
+
+    if (check.blank.pointer(model$cpp_objects$indexer$ptr)) {
+        if (NROW(model$cpp_objects$indexer$ser)) {
+            check.valid.ser(model$cpp_objects$indexer$ser)
+            set.list.elt(model$cpp_objects$indexer, "ptr", deserialize_Indexer(model$cpp_objects$indexer$ser))
+        }
+    }
+}
+
+check.valid.handles <- function(model) {
+    if (
+        !inherits(model$cpp_objects$model$ptr, "externalptr") ||
+        check_null_ptr_model_internal(model$cpp_objects$model$ptr) ||
+        !inherits(model$cpp_objects$imputer$ptr, "externalptr") ||
+        !inherits(model$cpp_objects$indexer$ptr, "externalptr") ||
+        (
+            model$params$build_imputer &&
+            check_null_ptr_model_internal(model$cpp_objects$imputer$ptr)
+        )
+    ) {
+        stop(
+            "Model has corrupted handles. See documentation for 'lazy_serialization' in 'isolation.forest'."
+        )
+    }
 }
 
 #' @title Get Number of Nodes per Tree
@@ -2058,7 +2162,7 @@ isotree.restore.handle <- function(model)  {
 #' @export
 isotree.get.num.nodes <- function(model)  {
     isotree.restore.handle(model)
-    return(get_n_nodes(model$cpp_obj$ptr, model$params$ndim > 1, model$nthreads))
+    return(get_n_nodes(model$cpp_objects$model$ptr, model$params$ndim > 1, model$nthreads))
 }
 
 #' @title Append isolation trees from one model into another
@@ -2080,6 +2184,9 @@ isotree.get.num.nodes <- function(model)  {
 #' potentially crashing the R process when using the resulting object.
 #' 
 #' Also be aware that the first input will be modified in-place.
+#' 
+#' If using `lazy_serialization=FALSE`, this will trigger a re-serialization so it will be slower
+#' than if using `lazy_serialization=TRUE`.
 #' @param model An Isolation Forest model (as returned by function \link{isolation.forest})
 #' to which trees from `other` (another Isolation Forest model) will be appended into.
 #' 
@@ -2103,8 +2210,8 @@ isotree.get.num.nodes <- function(model)  {
 #' X2 <- matrix(rnorm(m*n), nrow=m)
 #' 
 #' ### Fit a model to each dataset
-#' iso1 <- isolation.forest(X1, ntrees=3, nthreads=1)
-#' iso2 <- isolation.forest(X2, ntrees=2, nthreads=1)
+#' iso1 <- isolation.forest(X1, ntrees=3, ndim=2, nthreads=1)
+#' iso2 <- isolation.forest(X2, ntrees=2, ndim=2, nthreads=1)
 #' 
 #' ### Check the terminal nodes for some observations
 #' nodes1 <- predict(iso1, head(X1, 3), type="tree_num")
@@ -2131,6 +2238,10 @@ isotree.append.trees <- function(model, other) {
     if (!inherits(model, "isolation_forest") || !inherits(other, "isolation_forest")) {
         stop("'model' and 'other' must be isolation forest models.")
     }
+
+    isotree.restore.handle(model)
+    isotree.restore.handle(other)
+
     if ((model$params$ndim == 1) != (other$params$ndim == 1)) {
         stop("Cannot mix extended and regular isolation forest models (ndim=1).")
     }
@@ -2142,22 +2253,27 @@ isotree.append.trees <- function(model, other) {
     if (is.na(model$params$ntrees + other$params$ntrees) || (model$params$ntrees + other$params$ntrees) > .Machine$integer.max)
         stop("Resulting object would exceed number of trees limit.")
     
-    serialized <- raw()
-    imp_ser <- raw()
-    ind_ser <- raw()
-    if (NROW(model$cpp_obj$serialized))
-        serialized <- model$cpp_obj$serialized
-    if (NROW(model$cpp_obj$imp_ser))
-        imp_ser    <- model$cpp_obj$imp_ser
-    if (NROW(model$cpp_obj$ind_ser))
-        ind_ser    <- model$cpp_obj$ind_ser
+    model_ser <- raw()
+    imputer_ser <- raw()
+    indexer_ser <- raw()
 
-    append_trees_from_other(model$cpp_obj$ptr,      other$cpp_obj$ptr,
-                            model$cpp_obj$imp_ptr,  other$cpp_obj$imp_ptr,
-                            model$cpp_obj$ind_ser,  other$cpp_obj$ind_ser,
+    is_altrepped <- check_is_altrepped_ptr(model$cpp_objects$model)
+    if (!is_altrepped) {
+        if (NROW(model$cpp_objects$model$ser))
+            model_ser    <-  model$cpp_objects$model$ser
+        if (NROW(model$cpp_objects$imputer$ser))
+            imputer_ser  <-  model$cpp_objects$imputer$ser
+        if (NROW(model$cpp_objects$indexer$ser))
+            indexer_ser  <-  model$cpp_objects$indexer$ser
+    }
+
+    append_trees_from_other(model$cpp_objects$model$ptr,    other$cpp_objects$model$ptr,
+                            model$cpp_objects$imputer$ptr,  other$cpp_objects$imputer$ptr,
+                            model$cpp_objects$indexer$ptr,  other$cpp_objects$indexer$ptr,
                             model$params$ndim > 1,
-                            serialized, imp_ser, ind_ser,
-                            model$cpp_obj, model$params)
+                            model_ser, imputer_ser, indexer_ser,
+                            model$cpp_obj, model$params,
+                            is_altrepped)
     return(invisible(model))
 }
 
@@ -2253,8 +2369,7 @@ isotree.append.trees <- function(model, other) {
 #' @seealso \link{isotree.import.model} \link{isotree.restore.handle}
 #' @export
 isotree.export.model <- function(model, file, add_metadata_file=FALSE) {
-    if (!inherits(model, "isolation_forest"))
-        stop("This function is only available for isolation forest objects as returned from 'isolation.forest'.")
+    isotree.restore.handle(model)
 
     file <- path.expand(file)
     metadata <- export.metadata(model)
@@ -2269,19 +2384,35 @@ isotree.export.model <- function(model, file, add_metadata_file=FALSE) {
     metadata <- enc2utf8(metadata)
     metadata <- charToRaw(metadata)
 
-    serialized <- raw()
-    imp_ser <- raw()
-    ind_ser <- raw()
-    if (NROW(model$cpp_obj$serialized))
-        serialized <- model$cpp_obj$serialized
-    if (NROW(model$cpp_obj$imp_ser))
-        imp_ser    <- model$cpp_obj$imp_ser
-    if (NROW(model$cpp_obj$ind_ser))
-        ind_ser    <- model$cpp_obj$ind_ser
+    model_ser <- raw()
+    imputer_ser <- raw()
+    indexer_ser <- raw()
+    
+    if (NROW(model$cpp_objects$model$ser)) {
+        model_ser <- model$cpp_objects$model$ser
+    } else {
+        if (model$params$ndim > 1)
+            model_ser <- serialize_ExtIsoForest_from_ptr(model$cpp_objects$model$ptr)
+        else
+            model_ser <- serialize_IsoForest_from_ptr(model$cpp_objects$model$ptr)
+    }
+    
+    if (NROW(model$cpp_objects$imputer$ser)) {
+        imputer_ser <- model$cpp_objects$imputer$ser
+    } else if (!check_null_ptr_model_internal(model$cpp_objects$imputer$ptr)) {
+        imputer_ser <- serialize_Imputer_from_ptr(model$cpp_objects$imputer$ptr)
+    }
+    
+    if (NROW(model$cpp_objects$indexer$ser)) {
+        indexer_ser <- model$cpp_objects$indexer$ser
+    } else if (!check_null_ptr_model_internal(model$cpp_objects$indexer$ptr)) {
+        indexer_ser <- serialize_Imputer_from_ptr(model$cpp_objects$indexer$ptr)
+    }
+    
     serialize_to_file(
-        serialized,
-        imp_ser,
-        ind_ser,
+        model_ser,
+        imputer_ser,
+        indexer_ser,
         model$params$ndim > 1,
         metadata,
         file
@@ -2305,24 +2436,25 @@ isotree.export.model <- function(model, file, add_metadata_file=FALSE) {
 #' @param file Path to the saved isolation forest model.
 #' Must be a file path, not a file connection,
 #' and the character encoding should correspond to the system's native encoding.
+#' @param lazy_serialization Whether to use lazy serialization through the ALTREP
+#' system for the resulting objects. See the documentation for this same parameter
+#' in \link{isolation.forest} for details.
 #' @details If the model was fit to a `DataFrame` using Pandas' own Boolean types,
 #' take a look at the metadata to check if these columns will be taken as booleans
 #' (R logicals) or as categoricals with string values `"True"` and `"False"`.
 #' 
 #' See the documentation for \link{isotree.export.model} for details about compatibility
 #' of the generated files across different machines and versions.
-#' 
-#' If using this function to de-serialize a model in a production system, one might
-#' want to delete the serialized bytes inside the object afterwards in order to free up memory.
-#' These are under `model$cpp_obj$serialized` (plus `model$cpp_obj$imp_ser` if building with imputer)
-#' - e.g.: `model$cpp_obj$serialized = NULL; model$cpp_obj$imp_ser = NULL; gc()`.
 #' @return An isolation forest model, as if it had been constructed through
 #' \link{isolation.forest}.
 #' @seealso \link{isotree.export.model} \link{isotree.restore.handle}
 #' @export
-isotree.import.model <- function(file) {
+isotree.import.model <- function(file, lazy_serialization = TRUE) {
+    check.is.bool(lazy_serialization)
+    lazy_serialization <- as.logical(lazy_serialization)
+
     if (!file.exists(file)) stop("'file' does not exist.")
-    res <- deserialize_from_file(file)
+    res <- deserialize_from_file(file, lazy_serialization)
     metadata <- rawToChar(res$metadata)
     Encoding(metadata) <- "UTF-8"
     metadata <- enc2native(metadata)
@@ -2331,15 +2463,12 @@ isotree.import.model <- function(file) {
                                    simplifyDataFrame = FALSE,
                                    simplifyMatrix = FALSE)
     this <- take.metadata(metadata)
-    this$cpp_obj <- list(
-        ptr         =  res$ptr,
-        serialized  =  res$serialized,
-        imp_ptr     =  res$imp_ptr,
-        imp_ser     =  res$imp_ser,
-        indexer     =  res$indexer,
-        ind_ser     =  res$ind_ser
+    this$cpp_objects <- list(
+        model    =  res$model,
+        imputer  =  res$imputer,
+        indexer  =  res$indexer
     )
-    if (!NROW(this$metadata$imp_ser))
+    if (check_null_ptr_model_internal(this$cpp_objects$imputer$ptr))
         this$metadata$has_imputer <- FALSE
     class(this) <- "isolation_forest"
     return(this)
@@ -2388,9 +2517,9 @@ isotree.import.model <- function(file) {
 #' work for e.g. SQL Server.
 #' \item `"none"`, which will output the column names as-is (e.g. `column_name`)
 #' }
-#' @param output_tree_num Whether to make the statements return the terminal node number
+#' @param output_tree_num Whether to make the statements / outputs return the terminal node number
 #' instead of the isolation depth. The numeration will start at one.
-#' @param tree Tree for which to generate SQL statements. If passed, will generate
+#' @param tree Tree for which to generate SQL statements or other outputs. If passed, will generate
 #' the statements only for that single tree. If passing `NULL`, will
 #' generate statements for all trees in the model.
 #' @param table_from If passing this, will generate a single select statement for the
@@ -2405,8 +2534,8 @@ isotree.import.model <- function(file) {
 #' If not passing it and the model was fit to data in a format other than
 #' `data.frame`, the columns will be named `column_N` in the resulting
 #' SQL statement. Note that the names will be taken verbatim - this function will
-#' not do any checks for whether they constitute valid SQL or not, and will not
-#' escape characters such as double quotation marks.
+#' not do any checks for e.g. whether they constitute valid SQL or not when exporting to SQL, and will not
+#' escape characters such as double quotation marks when exporting to SQL.
 #' @param column_names_categ Column names to use for the \bold{categorical} columns.
 #' If not passed, will use the column names from the `data.frame` to which the
 #' model was fit. These can be found under `model$metadata$cols_cat`.
@@ -2431,7 +2560,9 @@ isotree.import.model <- function(file) {
 #' @export
 isotree.to.sql <- function(model, enclose="doublequotes", output_tree_num = FALSE, tree = NULL,
                            table_from = NULL, select_as = "outlier_score",
-                           column_names = NULL, column_names_categ = NULL, nthreads = model$nthreads) {
+                           column_names = NULL, column_names_categ = NULL,
+                           nthreads = model$nthreads) {
+    # TODO refactor common parts for sql, graphviz, and json converters
     isotree.restore.handle(model)
     
     allowed_enclose <- c("doublequotes", "squarebraces", "none")
@@ -2452,7 +2583,7 @@ isotree.to.sql <- function(model, enclose="doublequotes", output_tree_num = FALS
         if (NROW(tree) != 1L)
             stop("'tree' must be a single integer.")
         tree <- as.integer(tree)
-        if (is.na(tree) || (tree < 1L) || (tree > get_ntrees(model$cpp_obj$ptr, model$params$ndim > 1)))
+        if (is.na(tree) || (tree < 1L) || (tree > get_ntrees(model$cpp_objects$model$ptr, model$params$ndim > 1L)))
             stop("Invalid tree number.")
     } else {
         tree <- 0L
@@ -2474,40 +2605,11 @@ isotree.to.sql <- function(model, enclose="doublequotes", output_tree_num = FALS
         output_tree_num <- FALSE
     }
     
-    if (model$metadata$ncols_num) {
-        if (!is.null(column_names)) {
-            if (NROW(column_names) != model$metadata$ncols_num)
-                stop(sprintf("'column_names' must have length %d", model$metadata$ncols_num))
-            if (!is.character(column_names))
-                stop("'column_names' must be a character vector.")
-            cols_num <- column_names
-        } else {
-            if (NROW(model$metadata$cols_num)) {
-                cols_num <- model$metadata$cols_num
-            } else {
-                cols_num <- paste0("column_", seq(1L, model$metadata$ncols_num))
-            }
-        }
-    } else {
-        cols_num <- character()
-    }
-    
-    if (model$metadata$ncols_cat) {
-        if (!is.null(column_names_categ)) {
-            if (NROW(column_names_categ) != model$metadata$ncols_cat)
-                stop(sprintf("'column_names_categ' must have length %d", model$metadata$ncols_cat))
-            if (!is.character(column_names_categ))
-                stop("'column_names_categ' must be a character vector.")
-            cols_cat <- column_names_categ
-        } else {
-            cols_cat <- model$metadata$cols_cat
-        }
-        
-        cat_levels <- model$metadata$cat_levs
-    } else {
-        cols_cat <- character()
-        cat_levels <- list()
-    }
+    tmp <- check.formatted.export.colnames(model, column_names, column_names_categ)
+    cols_num    <-  tmp$cols_num
+    cols_cat    <-  tmp$cols_cat
+    cat_levels  <-  tmp$cat_levels
+    rm(tmp)
     
     if (enclose != "none") {
         enclose_left <- ifelse(enclose == "doublequotes", '"', '[')
@@ -2522,7 +2624,7 @@ isotree.to.sql <- function(model, enclose="doublequotes", output_tree_num = FALS
     nthreads    <- check.nthreads(nthreads)
     
     if (is.null(table_from)) {
-        out <- model_to_sql(model$cpp_obj$ptr, is_extended,
+        out <- model_to_sql(model$cpp_objects$model$ptr, is_extended,
                             cols_num, cols_cat, cat_levels,
                             output_tree_num, single_tree, tree,
                             nthreads)
@@ -2532,12 +2634,229 @@ isotree.to.sql <- function(model, enclose="doublequotes", output_tree_num = FALS
             return(out)
         }
     } else {
-        return(model_to_sql_with_select_from(model$cpp_obj$ptr, is_extended,
+        return(model_to_sql_with_select_from(model$cpp_objects$model$ptr, is_extended,
                                              cols_num, cols_cat, cat_levels,
                                              table_from,
                                              select_as,
                                              nthreads))
     }
+}
+
+#' @title Generate GraphViz Dot Representation of Tree
+#' @description Generate GraphViz representations of model trees in 'dot' format - either
+#' separately per tree (the default), or for a single tree if needed (if passing `tree`)
+#' Can also be made to output terminal node numbers (numeration starting at one).
+#' 
+#' These can be loaded as graphs through e.g. `DiagrammeR::grViz(x)`, where `x` would
+#' be the output of this function for a given tree.
+#' 
+#' Graph format is based on XGBoost's.
+#' @details
+#' \itemize{
+#' \item The generated graphs will not include range penalizations, thus
+#' predictions might differ from calls to `predict` when using
+#' `penalize_range=TRUE`.
+#' \item The generated graphs will only include handling of missing values
+#' when using `missing_action="impute"`. When using the single-variable
+#' model with categorical variables + subset splits, the rule buckets might be
+#' incomplete due to not including categories that were not present in a given
+#' node - this last point can be avoided by using `new_categ_action="smallest"`,
+#' `new_categ_action="random"`, or `missing_action="impute"` (in the latter
+#' case will treat them as missing, but the `predict` function might treat
+#' them differently).
+#' \item If using `scoring_metric="density"` or `scoring_metric="boxed_ratio"` plus
+#' `output_tree_num=FALSE`, the
+#' outputs will correspond to the logarithm of the density rather than the density.
+#' }
+#' @inheritParams isotree.to.sql
+#' @returns If passing `tree=NULL`, will return a list with one element per tree in the model,
+#' where each element consists of an R character / string with the 'dot' format representation
+#' of the tree. If passing `tree`, the output will be instead a single character / string element
+#' with the 'dot' representation for that tree.
+#' @examples
+#' library(isotree)
+#' set.seed(123)
+#' X <- matrix(rnorm(100 * 3), nrow = 100)
+#' model <- isolation.forest(X, ndim=1, max_depth=3, ntrees=2, nthreads=1)
+#' model_as_graphviz <- isotree.to.graphviz(model)
+#' 
+#' # These can be parsed and plotted with library 'DiagrammeR'
+#' if (require("DiagrammeR")) {
+#'     # first tree
+#'     DiagrammeR::grViz(model_as_graphviz[[1]])
+#' 
+#      second tree
+#'     DiagrammeR::grViz(model_as_graphviz[[1]])
+#' }
+#' @export
+isotree.to.graphviz <- function(model, output_tree_num = FALSE, tree = NULL,
+                                column_names = NULL, column_names_categ = NULL,
+                                nthreads = model$nthreads) {
+    # TODO refactor common parts for sql, graphviz, and json converters
+    isotree.restore.handle(model)
+    
+    if (NROW(output_tree_num) != 1L)
+        stop("'output_tree_num' must be a single logical/boolean.")
+    output_tree_num <- as.logical(output_tree_num)
+    if (is.na(output_tree_num))
+        stop("Invalid 'output_tree_num'.")
+    
+    single_tree <- !is.null(tree)
+    if (single_tree) {
+        if (NROW(tree) != 1L)
+            stop("'tree' must be a single integer.")
+        tree <- as.integer(tree)
+        if (is.na(tree) || (tree < 1L) || (tree > get_ntrees(model$cpp_objects$model$ptr, model$params$ndim > 1L)))
+            stop("Invalid tree number.")
+    } else {
+        tree <- 0L
+    }
+
+    tmp <- check.formatted.export.colnames(model, column_names, column_names_categ)
+    cols_num    <-  tmp$cols_num
+    cols_cat    <-  tmp$cols_cat
+    cat_levels  <-  tmp$cat_levels
+    rm(tmp)
+        
+    is_extended <- model$params$ndim > 1L
+    nthreads    <- check.nthreads(nthreads)
+
+    out <- model_to_graphviz(model$cpp_objects$model$ptr, is_extended,
+                             model$cpp_objects$indexer$ptr,
+                             cols_num, cols_cat, cat_levels,
+                             output_tree_num, single_tree, tree,
+                             nthreads)
+    
+    if (single_tree) {
+        return(out[[1L]])
+    } else {
+        return(out)
+    }
+}
+
+#' @title Generate JSON representations of model trees
+#' @description Generates a JSON representation of either a single tree in the model, or of all
+#' the trees in the model.
+#' 
+#' The JSON for a given tree will consist of a sub-json/list for each node, where nodes
+#' are indexed by their number (base-1 indexing) as keys in these JSONs (note that they
+#' are strings, not numbers, in order to conform to JSON format).
+#' 
+#' Nodes will in turn consist of another map/list indicating whether they are terminal nodes
+#' or not, their score and terminal node index if terminal, or otherwise the split conditions,
+#' nodes to follow when the condition is or isn't met, and other aspects such as imputation
+#' values if applicable, acceptable ranges when using range penalizations, fraction of the data
+#' that went into the left node if recorded, among others.
+#' 
+#' Note that the JSON structure will be very different for models that have `ndim=1`
+#' than for models that have `ndim>1`. In the case of `ndim=1`, the conditions are
+#' based on the value of only one variable, but for `ndim=2`, they will consist of
+#' a linear combination of different columns (which is expressed as a list of JSONs
+#' with one entry per column that goes into the calculation) - for numeric columns for example,
+#' these will be expressed in the json by a coefficient for the given column, and a centering
+#' that needs to be applied, with the score from that column being added as
+#' 
+#' \eqn{\text{coef} \times (x - \text{centering})}
+#' 
+#' and the imputation value being applied in replacement of this formula in the case of
+#' missing values for that column (depending on the model parameters); while in the case of
+#' categorical columns, might either have a different coefficient for each possible category
+#' (`categ_split_type="subset"`), or a single category that gets a non-zero coefficient
+#' while the others get zeros (`categ_split_type="single_categ"`).
+#' 
+#' The JSONs might contain redundant information in order to ease understanding of the model
+#' logic - for example, when using `ndim>1` and `categ_split_type="single_categ"`,
+#' the coefficient for the non-chosen categories will always be zero, but is nevertheless
+#' added to every node's JSON, even if not needed.
+#' @details
+#' \itemize{
+#' \item If using `scoring_metric="density"` or `scoring_metric="boxed_ratio"` plus
+#' `output_tree_num=FALSE`, the
+#' outputs will correspond to the logarithm of the density rather than the density.
+#' }
+#' @inheritParams isotree.to.graphviz
+#' @param as_str Whether to return the result as raw JSON strings (returned as R's character type)
+#' instead of being parsed into R lists (internally, it uses `jsonlite::fromJSON`).
+#' @returns Either a list of lists (when passing `as_str=FALSE`) or a vector of characters (when passing
+#' `as_str=TRUE`), or a single such list or character element if passing `tree`.
+#' @export
+isotree.to.json <- function(model, output_tree_num = FALSE, tree = NULL,
+                            column_names = NULL, column_names_categ = NULL,
+                            as_str = FALSE, nthreads = model$nthreads) {
+    # TODO refactor common parts for sql, graphviz, and json converters
+    isotree.restore.handle(model)
+    
+    if (NROW(output_tree_num) != 1L)
+        stop("'output_tree_num' must be a single logical/boolean.")
+    output_tree_num <- as.logical(output_tree_num)
+    if (is.na(output_tree_num))
+        stop("Invalid 'output_tree_num'.")
+    
+    single_tree <- !is.null(tree)
+    if (single_tree) {
+        if (NROW(tree) != 1L)
+            stop("'tree' must be a single integer.")
+        tree <- as.integer(tree)
+        if (is.na(tree) || (tree < 1L) || (tree > get_ntrees(model$cpp_objects$model$ptr, model$params$ndim > 1L)))
+            stop("Invalid tree number.")
+    } else {
+        tree <- 0L
+    }
+
+    tmp <- check.formatted.export.colnames(model, column_names, column_names_categ)
+    cols_num    <-  tmp$cols_num
+    cols_cat    <-  tmp$cols_cat
+    cat_levels  <-  tmp$cat_levels
+    rm(tmp)
+        
+    is_extended <- model$params$ndim > 1L
+    nthreads    <- check.nthreads(nthreads)
+
+    out <- model_to_json(model$cpp_objects$model$ptr, is_extended,
+                         model$cpp_objects$indexer$ptr,
+                         cols_num, cols_cat, cat_levels,
+                         output_tree_num, single_tree, tree,
+                         nthreads)
+    if (!as_str)
+        out <- lapply(out, jsonlite::fromJSON)
+    else
+        out <- unlist(out)
+    
+    if (single_tree) {
+        return(out[[1L]])
+    } else {
+        return(out)
+    }
+}
+
+#' @title Plot Tree from Isolation Forest Model
+#' @description Plots a given tree from an isolation forest model.
+#' 
+#' Requires the `DiagrammeR` library to be installed.
+#' 
+#' Note that this is just a wrapper over \link{isotree.to.graphviz} + `DiagrammeR::grViz`.
+#' @details In general, isolation forest trees tend to be rather large, and the contents on the
+#' nodes can be very long when using `ndim>1` - if the idea is to get easily visualizable
+#' trees, one might want to use parameters like `ndim=1`, `sample_size=256`, `max_depth=8`.
+#' @inheritParams isotree.to.graphviz
+#' @param width Width for the plot, to pass to `DiagrammeR::grViz`.
+#' @param height Height for the plot, to pass to `DiagrammeR::grViz`.
+#' @returns An `htmlwidget` object that contains the plot.
+#' @export
+isotree.plot.tree <- function(model, output_tree_num = FALSE, tree = 1L,
+                              column_names = NULL, column_names_categ = NULL,
+                              nthreads = model$nthreads, width = NULL, height = NULL) {
+    txt <- isotree.to.graphviz(model=model, output_tree_num=output_tree_num, tree=tree,
+                               column_names=column_names, column_names_categ=column_names_categ,
+                               nthreads=model$nthreads)
+    return(
+        DiagrammeR::grViz(
+            txt,
+            engine = "dot",
+            width = width,
+            height = height
+        )
+    )
 }
 
 #' @title Deep-Copy an Isolation Forest Model Object
@@ -2547,21 +2866,43 @@ isotree.to.sql <- function(model, enclose="doublequotes", output_tree_num = FALS
 #' and \link{isotree.append.trees} - as otherwise R's objects follow a copy-on-write logic.
 #' @param model An `isolation_forest` model object.
 #' @return A new `isolation_forest` object, with deep-copied C++ objects.
+#' @seealso \link{isotree.is.same}
 #' @export
 isotree.deep.copy <- function(model) {
     isotree.restore.handle(model)
-    new_pointers <- copy_cpp_objects(model$cpp_obj$ptr, model$params$ndim > 1,
-                                     model$cpp_obj$imp_ptr, !is.null(model$cpp_obj$imp_ptr),
-                                     model$cpp$indexer)
+
+    lazy_serialization <- check_is_altrepped_ptr(model$cpp_objects$model)
+    new_pointers <- copy_cpp_objects(model$cpp_objects$model$ptr, model$params$ndim > 1,
+                                     model$cpp_objects$imputer$ptr,
+                                     model$cpp_objects$indexer$ptr,
+                                     lazy_serialization)
     new_model <- model
-    new_model$cpp_obj <- list(
-        ptr         =  new_pointers$ptr,
-        serialized  =  model$cpp_obj$serialized,
-        imp_ptr     =  new_pointers$imp_ptr,
-        imp_ser     =  model$cpp_obj$imp_ser,
-        indexer     =  new_pointers$indexer,
-        ind_ser     =  model$cpp_obj$ind_ser
-    )
+    new_model$params$ntrees <- deepcopy_int(model$params$ntrees)
+
+    if (lazy_serialization) {
+        cpp_objects <- list(
+            model = new_pointers$model,
+            imputer = new_pointers$imputer,
+            indexer = new_pointers$indexer
+        )
+    } else {
+        cpp_objects <- list(
+            model = list(
+                ptr = new_pointers$model,
+                ser = model$cpp_objects$model$ser
+            ),
+            imputer = list(
+                ptr = new_pointers$imputer,
+                ser = model$cpp_objects$imputer$ser
+            ),
+            indexer = list(
+                ptr = new_pointers$indexer,
+                ser = model$cpp_objects$indexer$ser
+            )
+        )
+    }
+
+    new_model$cpp_objects <- cpp_objects
     new_model$metadata <- list(
         ncols_num  =  model$metadata$ncols_num,
         ncols_cat  =  model$metadata$ncols_cat,
@@ -2571,8 +2912,45 @@ isotree.deep.copy <- function(model) {
         categ_cols =  model$metadata$categ_cols,
         categ_max  =  model$metadata$categ_max
     )
-    new_model$params$ntrees <- deepcopy_int(model$params$ntrees)
     return(new_model)
+}
+
+#' @title Check if two Isolation Forest Models Share the Same C++ Object
+#' @description Checks if two isolation forest models, as produced by functions
+#' like \link{isolation.forest}, have a reference to the same underlying C++ object.
+#' 
+#' When this is the case, functions that produce in-place modifications, such as
+#' \link{isotree.build.indexer}, will produce changes in all of the R variables that
+#' share the same C++ object.
+#' 
+#' Two R variables will have the same C++ object when assigning one variable to another,
+#' but will have different C++ objects when these R objects are serialized and
+#' deserialized or when calling \link{isotree.deep.copy}.
+#' @param obj1 First model to compare (against `obj2`).
+#' @param obj2 Second model to compare (against `obj1`).
+#' @return A logical (boolean) value which will be `TRUE` when both models
+#' have a reference to the same C++ object, or `FALSE` otherwise.
+#' @examples
+#' library(isotree)
+#' data(mtcars)
+#' model <- isolation.forest(mtcars, ntrees = 10, nthreads = 1, ndim = 1)
+#' 
+#' model_shallow_copy <- model
+#' isotree.is.same(model, model_shallow_copy)
+#' 
+#' model_deep_copy <- isotree.deep.copy(model)
+#' isotree.is.same(model, model_deep_copy)
+#' 
+#' isotree.add.tree(model_shallow_copy, mtcars)
+#' length(isotree.get.num.nodes(model_shallow_copy)$total)
+#' length(isotree.get.num.nodes(model)$total)
+#' length(isotree.get.num.nodes(model_deep_copy)$total)
+#' @seealso \link{isotree.deep.copy}
+#' @export
+isotree.is.same <- function(obj1, obj2) {
+    isotree.restore.handle(obj1)
+    isotree.restore.handle(obj2)
+    return(compare_pointers(obj1$cpp_objects$model$ptr, obj2$cpp_objects$model$ptr))
 }
 
 #' @title Drop Imputer Sub-Object from Isolation Forest Model Object
@@ -2580,20 +2958,34 @@ isotree.deep.copy <- function(model) {
 #' capabilities. The imputer, if constructed, is likely to be a very heavy object which might
 #' not be needed for all purposes.
 #' @param model An `isolation_forest` model object.
+#' @param manually_delete_cpp Whether to manually delete the underlying C++ object after calling this function.
+#' 
+#' If passing `FALSE`, memory will not be freed until the underlying R 'externalptr' object is garbage-collected,
+#' which typically happens after the next call to `gc()`.
+#' 
+#' If passing `TRUE`, will manually delete the C++ object held in the 'externalptr' object before nullifying it.
+#' Note that, if somehow one assigned the pointer address to some other R variable through e.g. a deep copy of
+#' the 'externalptr' object (that happened without copying the full model object where this R variable is stored),
+#' then other pointers pointing at the same address might trigger crashes at the moment they are used.
+#' 
+#' Note that, unless one starts manually fiddling with the internals of model objects and assigning variables to/from
+#' them, it should not be possible to end up in a situation in which an 'externalptr' object ends up deep-copied,
+#' especially when using `lazy_serialization=TRUE`.
 #' @return The same `model` object, but now with the imputer removed. \bold{Note that `model` is modified in-place
 #' in any event}.
 #' @export
-isotree.drop.imputer <- function(model) {
+isotree.drop.imputer <- function(model, manually_delete_cpp = TRUE) {
     if (!inherits(model, "isolation_forest"))
         stop("This function is only available for isolation forest objects as returned from 'isolation.forest'.")
-    if (NROW(model$cpp_obj$imp_ser) && check_null_ptr_model(model$cpp_obj$imp_ptr)) {
-        on.exit({
-            set.list.elt(model$params, "build_imputer", FALSE)
-            set.list.elt(model$cpp_obj, "imp_ser", raw())
-        })
+    check.is.bool(manually_delete_cpp)
+    manually_delete_cpp <- as.logical(manually_delete_cpp)
+    is_altrepped <- check_is_altrepped_ptr(model$cpp_objects$imputer)
+    if (is_altrepped && check_null_ptr_model_internal(model$cpp_objects$imputer$ptr)) {
         return(invisible(model))
     }
-    drop_imputer(model$cpp_obj, model$params)
+    
+    drop_imputer(is_altrepped, manually_delete_cpp,
+                 model$cpp_objects$imputer, model$cpp_objects, model$params)
     return(invisible(model))
 }
 
@@ -2602,23 +2994,38 @@ isotree.drop.imputer <- function(model) {
 #' The indexer, if constructed, is likely to be a very heavy object which might
 #' not be needed for all purposes.
 #' @param model An `isolation_forest` model object.
+#' @param manually_delete_cpp Whether to manually delete the underlying C++ object after calling this function.
+#' 
+#' If passing `FALSE`, memory will not be freed until the underlying R 'externalptr' object is garbage-collected,
+#' which typically happens after the next call to `gc()`.
+#' 
+#' If passing `TRUE`, will manually delete the C++ object held in the 'externalptr' object before nullifying it.
+#' Note that, if somehow one assigned the pointer address to some other R variable through e.g. a deep copy of
+#' the 'externalptr' object (that happened without copying the full model object where this R variable is stored),
+#' then other pointers pointing at the same address might trigger crashes at the moment they are used.
+#' 
+#' Note that, unless one starts manually fiddling with the internals of model objects and assigning variables to/from
+#' them, it should not be possible to end up in a situation in which an 'externalptr' object ends up deep-copied,
+#' especially when using `lazy_serialization=TRUE`.
 #' @return The same `model` object, but now with the indexer removed. \bold{Note that `model` is modified in-place
 #' in any event}.
 #' @seealso \link{isotree.build.indexer}
 #' @details Note that reference points as added through \link{isotree.set.reference.points} are
 #' associated with the indexer object and will also be dropped if any were added.
 #' @export
-isotree.drop.indexer <- function(model) {
+isotree.drop.indexer <- function(model, manually_delete_cpp = TRUE) {
     if (!inherits(model, "isolation_forest"))
         stop("This function is only available for isolation forest objects as returned from 'isolation.forest'.")
-    if (NROW(model$cpp_obj$ind_ser) && check_null_ptr_model(model$cpp_obj$indexer)) {
-        on.exit({
-            set.list.elt(model$cpp_obj, "ind_ser", raw())
-            set.list.elt(model$metadata, "reference_names", FALSE)
-        })
+    
+    check.is.bool(manually_delete_cpp)
+    manually_delete_cpp <- as.logical(manually_delete_cpp)
+    is_altrepped <- check_is_altrepped_ptr(model$cpp_objects$indexer)
+    if (is_altrepped && check_null_ptr_model_internal(model$cpp_objects$indexer$ptr)) {
         return(invisible(model))
     }
-    drop_indexer(model$cpp_obj, model$metadata)
+    
+    drop_indexer(is_altrepped, manually_delete_cpp,
+                 model$cpp_objects$indexer, model$cpp_objects, model$metadata)
     return(invisible(model))
 }
 
@@ -2632,8 +3039,12 @@ isotree.drop.indexer <- function(model) {
 #' @export
 isotree.drop.reference.points <- function(model) {
     isotree.restore.handle(model)
-    if (!NROW(model$cpp_obj$ind_ser)) return(invisible(model))
-    drop_reference_points(model$cpp_obj, model$metadata)
+    if (check_null_ptr_model_internal(model$cpp_objects$indexer$ptr)) return(invisible(model))
+
+    drop_reference_points(check_is_altrepped_ptr(model$cpp_objects$indexer),
+                          model$cpp_objects$indexer,
+                          model$cpp_objects,
+                          model$metadata)
     return(invisible(model))
 }
 
@@ -2666,8 +3077,11 @@ isotree.build.indexer <- function(model, with_distances = FALSE, nthreads = mode
         stop("Cannot build tree indexer when using new_categ_action='weighted'.")
     check.is.bool(with_distances)
     nthreads <- check.nthreads(nthreads)
+    is_altrepped <- check_is_altrepped_ptr(model$cpp_objects$model)
     build_tree_indices(
-        model$cpp_obj,
+        model$cpp_objects,
+        model$cpp_objects$model$ptr,
+        is_altrepped,
         as.logical(model$params$ndim > 1),
         as.logical(with_distances),
         nthreads
@@ -2685,10 +3099,14 @@ isotree.build.indexer <- function(model, with_distances = FALSE, nthreads = mode
 #' @details Note that points are added in terms of their terminal node indices, but the raw data about
 #' them is not kept - thus, calling \link{isotree.add.tree} later on a model with reference points
 #' requires passing those reference points again to add their node indices to the new tree.
+#' 
+#' If using `lazy_serialization=TRUE`, and the process fails while setting references (e.g.
+#' due to out-of-memory errors), previous references that the model might have had will be lost.
 #' @param model An Isolation Forest model (as returned by function \link{isolation.forest})
 #' for which reference points for distance and/or kernel calculations will be set.
 #' 
-#' \bold{The object will be modified in-place}.
+#' \bold{The object will be modified in-place}. If there were any previous references, they will
+#' be overwritten with the new ones passed here.
 #' @param data Observations to set as reference points for future distance and/or isolation kernel calculations.
 #' Same format as for \link{predict.isolation_forest}.
 #' @param with_distances Whether to pre-calculate node distances (this is required to calculate distance
@@ -2734,10 +3152,13 @@ isotree.set.reference.points <- function(model, data, with_distances=FALSE, nthr
         set.list.elt(model$metadata, "cat_levs", pdata$cat_levs)
     }
 
-    if (!NROW(model$cpp_obj$ind_ser))
+    if (check_null_ptr_model_internal(model$cpp_objects$indexer$ptr))
         isotree.build.indexer(model, with_distances=with_distances)
 
-    set_reference_points(model$cpp_obj, model$metadata, row.names(data), model$params$ndim > 1,
+    set_reference_points(model$cpp_objects,
+                         model$cpp_objects$model$ptr, model$cpp_objects$indexer$ptr,
+                         check_is_altrepped_ptr(model$cpp_objects$model),
+                         model$metadata, row.names(data), model$params$ndim > 1,
                          pdata$X_num, pdata$X_cat,
                          pdata$Xc, pdata$Xc_ind, pdata$Xc_indptr,
                          pdata$nrows, nthreads, as.logical(with_distances))
@@ -2746,14 +3167,16 @@ isotree.set.reference.points <- function(model, data, with_distances=FALSE, nthr
 
 #' @title Subset trees of a given model
 #' @description Creates a new isolation forest model containing only selected trees of a
-#' given isolation forest model object.
-#' @param model An `isolation_forest` model object.
-#' @param trees_take Indices of the trees of `model` to copy over to a new model,
+#' given isolation forest model object. Note that, if using `lazy_serialization=FALSE`,
+#' this will re-trigger serialization.
+#' @param model,x An `isolation_forest` model object.
+#' @param trees_take,i Indices of the trees of `model` to copy over to a new model,
 #' as an integer vector.
 #' Must be integers with numeration starting at one
 #' @return A new isolation forest model object, containing only the subset of trees
 #' from this `model` that was specified under `trees_take`.
 #' @export
+#' @rdname isotree.subset.trees
 isotree.subset.trees <- function(model, trees_take) {
     isotree.restore.handle(model)
     trees_take <- as.integer(trees_take)
@@ -2764,21 +3187,21 @@ isotree.subset.trees <- function(model, trees_take) {
 
     ntrees_new <- length(trees_take)
     new_cpp_obj <- subset_trees(
-        model$cpp_obj$ptr, model$cpp_obj$imp_ptr, model$cpp_obj$indexer,
-        model$params$ndim > 1, model$params$build_imputer,
+        model$cpp_objects$model$ptr,
+        model$cpp_objects$imputer$ptr,
+        model$cpp_objects$indexer$ptr,
+        model$params$ndim > 1,
+        check_is_altrepped_ptr(model$cpp_objects$model),
         trees_take
     )
     new_model <- model
-    new_model$cpp_obj <- NULL
+    new_model$cpp_objects <- NULL
     new_model$params$ntrees <- ntrees_new
-    new_model$params$build_imputer <- as.logical(NROW(new_cpp_obj$imp_ser))
-    new_model$cpp_obj <- list(
-        ptr         =  new_cpp_obj$ptr,
-        serialized  =  new_cpp_obj$serialized,
-        imp_ptr     =  new_cpp_obj$imp_ptr,
-        imp_ser     =  new_cpp_obj$imp_ser,
-        indexer     =  new_cpp_obj$indexer,
-        ind_ser     =  new_cpp_obj$ind_ser
+    new_model$params$build_imputer <- !check_null_ptr_model_internal(new_cpp_obj$imputer$ptr)
+    new_model$cpp_objects <- list(
+        model    =  new_cpp_obj$model,
+        imputer  =  new_cpp_obj$imputer,
+        indexer  =  new_cpp_obj$indexer
     )
     new_model$metadata <- list(
         ncols_num  =  model$metadata$ncols_num,
@@ -2815,4 +3238,43 @@ isotree.set.nthreads <- function(model, nthreads = 1L) {
     }
     set.list.elt(model, "nthreads", nthreads)
     return(invisible(model))
+}
+
+### Other S3 methods
+
+#' @title Get Number of Trees in Model
+#' @description Returns the number of trees in an isolation forest model.
+#' @param x An isolation forest model, as returned by function \link{isolation.forest}.
+#' @return The number of trees in the model, as an integer.
+#' @export
+length.isolation_forest <- function(x) {
+    return(x$params$ntrees)
+}
+
+#' @export
+#' @rdname isotree.subset.trees
+`[.isolation_forest` <- function(x, i) {
+    return(
+        isotree.subset.trees(
+            x,
+            seq(1, length.isolation_forest(x))[i]
+        )
+    )
+}
+
+#' @title Get Variable Names for Isolation Forest Model
+#' @description Returns the names of the input data columns / variables to which an
+#' isolation forest model was fitted.
+#' 
+#' If the data did not have column names, it will make them up as "column_1..N".
+#' 
+#' Note that columns will always be reordered so that numeric columns come first, followed by
+#' categorical columns.
+#' @param object An isolation forest model, as returned by function \link{isolation.forest}.
+#' @param ... Not used.
+#' @return A character vector containing the column / variable names.
+#' @export
+variable.names.isolation_forest <- function(object, ...) {
+    out <- check.formatted.export.colnames(object, NULL, NULL)
+    return(c(out$cols_num, out$cols_cat))
 }

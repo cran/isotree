@@ -19,7 +19,6 @@ using std::uint32_t;
 using std::uint64_t;
 using std::memcpy;
 
-
 #if (__cplusplus >= 201703L) || (__cplusplus >= 201402L && (defined(__GNUC__) || defined(_MSC_VER)))
     #define SUPPORTS_HEXFLOAT
 #endif
@@ -279,13 +278,9 @@ static inline bool get_is_little_endian() noexcept
 static const bool is_little_endian = get_is_little_endian();
 
 /* ~Uniform([0,1))
-   Be aware that the compilers headers may:
-   - Produce a non-uniform distribution as they divide
-     by the maximum value of the generator (not all numbers
-     between zero and one are representable).
-   - Draw from a closed interval [0,1] (infinitesimal chance
-     that something will go wrong, but better not take it).
-   (For example, GCC4 had bugs like those)
+   Be aware that the compilers headers may produce a non-uniform
+   distribution as they divide by the maximum value of the generator
+   (not all numbers between zero and one are representable).
    Hence this replacement. It is not too much slower
    than what the compiler's header use. */
 class UniformUnitInterval

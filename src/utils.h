@@ -40,7 +40,7 @@
 *          International Conference on Knowledge Discovery & Data Mining. 2018.
 * 
 *     BSD 2-Clause License
-*     Copyright (c) 2019-2022, David Cortes
+*     Copyright (c) 2019-2024, David Cortes
 *     All rights reserved.
 *     Redistribution and use in source and binary forms, with or without
 *     modification, are permitted provided that the following conditions are met:
@@ -407,7 +407,7 @@ void build_btree_sampler(std::vector<double> &btree_weights, real_t *restrict sa
     
     if (std::isnan(btree_weights[0]) || btree_weights[0] <= 0)
     {
-        fprintf(stderr, "Numeric precision error with sample weights, will not use them.\n");
+        print_errmsg("Numeric precision error with sample weights, will not use them.\n");
         log2_n = 0;
         btree_weights.clear();
         btree_weights.shrink_to_fit();
@@ -645,16 +645,21 @@ void weighted_shuffle(size_t *restrict outp, size_t n, real_t *restrict weights,
     }
 }
 
+/* Goualard, Frédéric. "Drawing random floating-point numbers from an interval."
+   ACM Transactions on Modeling and Computer Simulation (TOMACS) 32.3 (2022): 1-24. */
+[[gnu::flatten]]
 double sample_random_uniform(double xmin, double xmax, RNG_engine &rng) noexcept
 {
-    double out;
-    std::uniform_real_distribution<double> runif(xmin, xmax);
-    for (int attempt = 0; attempt < 100; attempt++)
-    {
-        out = runif(rng);
-        if (likely(out < xmax)) return out;
+    const double random_unit = UniformUnitInterval(0, 1)(rng);
+    const double half_min = 0.5 * xmin;
+    const double half_max = 0.5 * xmax;
+    double out = 2. * (half_min + random_unit * (half_max - half_min));
+    if (unlikely(out >= xmax)) {
+        if (unlikely(xmax == xmin)) return xmin;
+        out = std::nextafter(xmax, xmin);
     }
-    return xmin;
+    out = std::fmax(out, xmin);
+    return out;
 }
 
 template <class ldouble_safe>
@@ -3581,8 +3586,11 @@ void fill_NAs_with_median(size_t *restrict ix_arr, size_t st_orig, size_t st, si
 }
 
 template <class real_t, class sparse_ix>
-void todense(size_t *restrict ix_arr, size_t st, size_t end,
-             size_t col_num, real_t *restrict Xc, sparse_ix *restrict Xc_ind, sparse_ix *restrict Xc_indptr,
+void todense(const size_t *restrict ix_arr, size_t st, size_t end,
+             size_t col_num,
+             const real_t *restrict Xc,
+             const sparse_ix *restrict Xc_ind,
+             const sparse_ix *restrict Xc_indptr,
              double *restrict buffer_arr)
 {
     std::fill(buffer_arr, buffer_arr + (end - st + 1), (double)0);
@@ -3591,9 +3599,9 @@ void todense(size_t *restrict ix_arr, size_t st, size_t end,
     size_t end_col = Xc_indptr[col_num + 1] - 1;
     size_t curr_pos = st_col;
     size_t ind_end_col = Xc_ind[end_col];
-    size_t *ptr_st = std::lower_bound(ix_arr + st, ix_arr + end + 1, Xc_ind[st_col]);
+    const size_t *ptr_st = std::lower_bound(ix_arr + st, ix_arr + end + 1, Xc_ind[st_col]);
 
-    for (size_t *row = ptr_st;
+    for (const size_t *row = ptr_st;
          row != ix_arr + end + 1 && curr_pos != end_col + 1 && ind_end_col >= *row;
         )
     {
@@ -3616,7 +3624,7 @@ void todense(size_t *restrict ix_arr, size_t st, size_t end,
 
 
 template <class real_t>
-void colmajor_to_rowmajor(real_t *restrict X, size_t nrows, size_t ncols, std::vector<double> &X_row_major)
+void colmajor_to_rowmajor(const real_t *restrict X, size_t nrows, size_t ncols, std::vector<double> &X_row_major)
 {
     X_row_major.resize(nrows * ncols);
     for (size_t row = 0; row < nrows; row++)
@@ -3625,7 +3633,7 @@ void colmajor_to_rowmajor(real_t *restrict X, size_t nrows, size_t ncols, std::v
 }
 
 template <class real_t, class sparse_ix>
-void colmajor_to_rowmajor(real_t *restrict Xc, sparse_ix *restrict Xc_ind, sparse_ix *restrict Xc_indptr,
+void colmajor_to_rowmajor(const real_t *restrict Xc, const sparse_ix *restrict Xc_ind, const sparse_ix *restrict Xc_indptr,
                           size_t nrows, size_t ncols,
                           std::vector<double> &Xr, std::vector<size_t> &Xr_ind, std::vector<size_t> &Xr_indptr)
 {
@@ -3694,7 +3702,7 @@ void check_interrupt_switch(SignalSwitcher &ss)
     if (interrupt_switch)
     {
         ss.restore_handle();
-        fprintf(stderr, "Error: procedure was interrupted\n");
+        print_errmsg("Error: procedure was interrupted\n");
         raise(SIGINT);
         #ifdef _FOR_R
         Rcpp::checkUserInterrupt();

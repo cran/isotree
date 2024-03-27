@@ -40,7 +40,7 @@
 *          International Conference on Knowledge Discovery & Data Mining. 2018.
 * 
 *     BSD 2-Clause License
-*     Copyright (c) 2019-2022, David Cortes
+*     Copyright (c) 2019-2024, David Cortes
 *     All rights reserved.
 *     Redistribution and use in source and binary forms, with or without
 *     modification, are permitted provided that the following conditions are met:
@@ -104,19 +104,19 @@
 #include <cfloat>
 #include <iostream>
 #include <string>
+#include <regex>
 
 #ifdef _FOR_R
     extern "C" {
         #include <R_ext/Print.h>
     }
-    #define fprintf(f, message) REprintf("%s", message)
+    #define print_errmsg(msg) REprintf("%s", msg)
 #elif defined(_FOR_PYTHON)
-    extern "C" void cy_warning(const char *msg);
-    #define fprintf(f, message) cy_warning(message)
+    extern "C" int cy_warning(const char *msg);
+    #define print_errmsg cy_warning
 #else
     #include <cstdio>
-    using std::printf;
-    using std::fprintf;
+    #define print_errmsg(msg) std::fprintf(stderr, "%s", msg)
 #endif
 #ifdef _OPENMP
     #include <omp.h>
@@ -264,6 +264,19 @@ using std::memcpy;
             #define ISOTREE_EXPORTED 
         #endif
     #endif
+#endif
+
+#ifndef unreachable
+#   if (__cplusplus >= 202309L)
+#       include <utility>
+        using std::unreachable;
+#   elif defined(_MSC_VER)
+#       define unreachable() (__assume(false))
+#   elif defined(__GNUC__) || defined(__clang__)
+#       define unreachable() __builtin_unreachable()
+#   else
+#       define unreachable() 
+#   endif
 #endif
 
 
@@ -1057,7 +1070,7 @@ double traverse_itree(std::vector<IsoTree>     &tree,
                       size_t                   row,
                       sparse_ix *restrict      tree_num,
                       double *restrict         tree_depth,
-                      size_t                   curr_lev) noexcept;
+                      size_t                   curr_lev);
 template <class PredictionData, class sparse_ix>
 [[gnu::hot]]
 void traverse_hplane_fast_colmajor(std::vector<IsoHPlane>  &hplane,
@@ -1111,22 +1124,25 @@ void traverse_hplane_csc(WorkerForPredictCSC      &workspace,
                          size_t                   curr_tree,
                          bool                     has_range_penalty);
 template <class PredictionData>
-void add_csc_range_penalty(WorkerForPredictCSC  &workspace,
-                           PredictionData       &prediction_data,
-                           double *restrict     weights_arr,
-                           size_t               col_num,
-                           double               range_low,
-                           double               range_high);
+void add_csc_range_penalty(WorkerForPredictCSC     &workspace,
+                           const PredictionData    &prediction_data,
+                           const double *restrict  weights_arr,
+                           size_t                  col_num,
+                           double                  range_low,
+                           double                  range_high);
+void throw_unsupported_pred_error();
 template <class PredictionData>
-double extract_spC(PredictionData &prediction_data, size_t row, size_t col_num) noexcept;
+double extract_spC(const PredictionData &prediction_data, size_t row, size_t col_num) noexcept;
 template <class PredictionData, class sparse_ix>
-static inline double extract_spR(PredictionData &prediction_data, sparse_ix *row_st, sparse_ix *row_end, size_t col_num, size_t lb, size_t ub) noexcept;
+static inline double extract_spR(const PredictionData &prediction_data,
+                                 const sparse_ix *row_st, const sparse_ix *row_end,
+                                 size_t col_num, size_t lb, size_t ub) noexcept;
 template <class PredictionData, class sparse_ix>
-double extract_spR(PredictionData &prediction_data, sparse_ix *row_st, sparse_ix *row_end, size_t col_num) noexcept;
+double extract_spR(const PredictionData &prediction_data, const sparse_ix *row_st, const sparse_ix *row_end, size_t col_num) noexcept;
 template <class sparse_ix>
-void get_num_nodes(IsoForest &model_outputs, sparse_ix *restrict n_nodes, sparse_ix *restrict n_terminal, int nthreads) noexcept;
+void get_num_nodes(const IsoForest &model_outputs, sparse_ix *restrict n_nodes, sparse_ix *restrict n_terminal, int nthreads) noexcept;
 template <class sparse_ix>
-void get_num_nodes(ExtIsoForest &model_outputs, sparse_ix *restrict n_nodes, sparse_ix *restrict n_terminal, int nthreads) noexcept;
+void get_num_nodes(const ExtIsoForest &model_outputs, sparse_ix *restrict n_nodes, sparse_ix *restrict n_terminal, int nthreads) noexcept;
 
 /* dist.cpp */
 template <class real_t, class sparse_ix>
@@ -1479,13 +1495,16 @@ template <class real_t>
 void fill_NAs_with_median(size_t *restrict ix_arr, size_t st_orig, size_t st, size_t end, real_t *restrict x,
                           double *restrict buffer_imputed_x, double *restrict xmedian);
 template <class real_t, class sparse_ix>
-void todense(size_t *restrict ix_arr, size_t st, size_t end,
-             size_t col_num, real_t *restrict Xc, sparse_ix *restrict Xc_ind, sparse_ix *restrict Xc_indptr,
+void todense(const size_t *restrict ix_arr, size_t st, size_t end,
+             size_t col_num,
+             const real_t *restrict Xc,
+             const sparse_ix *restrict Xc_ind,
+             const sparse_ix *restrict Xc_indptr,
              double *restrict buffer_arr);
 template <class real_t>
-void colmajor_to_rowmajor(real_t *restrict X, size_t nrows, size_t ncols, std::vector<double> &X_row_major);
+void colmajor_to_rowmajor(const real_t *restrict X, size_t nrows, size_t ncols, std::vector<double> &X_row_major);
 template <class real_t, class sparse_ix>
-void colmajor_to_rowmajor(real_t *restrict Xc, sparse_ix *restrict Xc_ind, sparse_ix *restrict Xc_indptr,
+void colmajor_to_rowmajor(const real_t *restrict Xc, const sparse_ix *restrict Xc_ind, const sparse_ix *restrict Xc_indptr,
                           size_t nrows, size_t ncols,
                           std::vector<double> &Xr, std::vector<size_t> &Xr_ind, std::vector<size_t> &Xr_indptr);
 template <class sparse_ix=size_t>
@@ -1523,39 +1542,33 @@ double calc_mean_only_weighted(size_t *restrict ix_arr, size_t st, size_t end, s
                                real_t_ *restrict Xc, sparse_ix *restrict Xc_ind, sparse_ix *restrict Xc_indptr,
                                mapping &restrict w);
 template <class real_t_>
-void add_linear_comb(size_t ix_arr[], size_t st, size_t end, double *restrict res,
-                     real_t_ *restrict x, double &restrict coef, double x_sd, double x_mean, double &restrict fill_val,
+void add_linear_comb(const size_t ix_arr[], size_t st, size_t end, double *restrict res,
+                     const real_t_ *restrict x, double &coef, double x_sd, double x_mean, double &restrict fill_val,
                      MissingAction missing_action, double *restrict buffer_arr,
                      size_t *restrict buffer_NAs, bool first_run);
 template <class real_t_, class mapping, class ldouble_safe>
-void add_linear_comb_weighted(size_t ix_arr[], size_t st, size_t end, double *restrict res,
-                              real_t_ *restrict x, double &restrict coef, double x_sd, double x_mean, double &restrict fill_val,
+void add_linear_comb_weighted(const size_t ix_arr[], size_t st, size_t end, double *restrict res,
+                              const real_t_ *restrict x, double &coef, double x_sd, double x_mean, double &restrict fill_val,
                               MissingAction missing_action, double *restrict buffer_arr,
                               size_t *restrict buffer_NAs, bool first_run, mapping &restrict w);
 template <class real_t_, class sparse_ix>
-void add_linear_comb(size_t *restrict ix_arr, size_t st, size_t end, size_t col_num, double *restrict res,
-                     real_t_ *restrict Xc, sparse_ix *restrict Xc_ind, sparse_ix *restrict Xc_indptr,
+void add_linear_comb(const size_t *restrict ix_arr, size_t st, size_t end, size_t col_num, double *restrict res,
+                     const real_t_ *restrict Xc, const sparse_ix *restrict Xc_ind, const sparse_ix *restrict Xc_indptr,
                      double &restrict coef, double x_sd, double x_mean, double &restrict fill_val, MissingAction missing_action,
                      double *restrict buffer_arr, size_t *restrict buffer_NAs, bool first_run);
 template <class real_t_, class sparse_ix, class mapping, class ldouble_safe>
-void add_linear_comb_weighted(size_t *restrict ix_arr, size_t st, size_t end, size_t col_num, double *restrict res,
-                              real_t_ *restrict Xc, sparse_ix *restrict Xc_ind, sparse_ix *restrict Xc_indptr,
+void add_linear_comb_weighted(const size_t *restrict ix_arr, size_t st, size_t end, size_t col_num, double *restrict res,
+                              const real_t_ *restrict Xc, const sparse_ix *restrict Xc_ind, const sparse_ix *restrict Xc_indptr,
                               double &restrict coef, double x_sd, double x_mean, double &restrict fill_val, MissingAction missing_action,
                               double *restrict buffer_arr, size_t *restrict buffer_NAs, bool first_run, mapping &restrict w);
-template <class mapping>
-void add_linear_comb_weighted(size_t *restrict ix_arr, size_t st, size_t end, double *restrict res,
-                              int x[], int ncat, double *restrict cat_coef, double single_cat_coef, int chosen_cat,
-                              double &restrict fill_val, double &restrict fill_new, size_t *restrict buffer_pos,
-                              NewCategAction new_cat_action, MissingAction missing_action, CategSplit cat_split_type,
-                              bool first_run, mapping &restrict w);
 template <class ldouble_safe>
-void add_linear_comb(size_t *restrict ix_arr, size_t st, size_t end, double *restrict res,
-                     int x[], int ncat, double *restrict cat_coef, double single_cat_coef, int chosen_cat,
+void add_linear_comb(const size_t *restrict ix_arr, size_t st, size_t end, double *restrict res,
+                     const int x[], int ncat, double *restrict cat_coef, double single_cat_coef, int chosen_cat,
                      double &restrict fill_val, double &restrict fill_new, size_t *restrict buffer_cnt, size_t *restrict buffer_pos,
                      NewCategAction new_cat_action, MissingAction missing_action, CategSplit cat_split_type, bool first_run);
 template <class mapping, class ldouble_safe>
-void add_linear_comb_weighted(size_t *restrict ix_arr, size_t st, size_t end, double *restrict res,
-                              int x[], int ncat, double *restrict cat_coef, double single_cat_coef, int chosen_cat,
+void add_linear_comb_weighted(const size_t *restrict ix_arr, size_t st, size_t end, double *restrict res,
+                              const int x[], int ncat, double *restrict cat_coef, double single_cat_coef, int chosen_cat,
                               double &restrict fill_val, double &restrict fill_new, size_t *restrict buffer_pos,
                               NewCategAction new_cat_action, MissingAction missing_action, CategSplit cat_split_type,
                               bool first_run, mapping &restrict w);
@@ -1883,18 +1896,18 @@ void set_reference_points(IsoForest *model_outputs, ExtIsoForest *model_outputs_
 
 /* merge_models.cpp */
 ISOTREE_EXPORTED
-void merge_models(IsoForest*     model,      IsoForest*     other,
-                  ExtIsoForest*  ext_model,  ExtIsoForest*  ext_other,
-                  Imputer*       imputer,    Imputer*       iother,
-                  TreesIndexer*  indexer,    TreesIndexer*  ind_other);
+void merge_models(IsoForest*     model,      const IsoForest*     other,
+                  ExtIsoForest*  ext_model,  const ExtIsoForest*  ext_other,
+                  Imputer*       imputer,    const Imputer*       iother,
+                  TreesIndexer*  indexer,    const TreesIndexer*  ind_other);
 
 /* subset_models.cpp */
 ISOTREE_EXPORTED
-void subset_model(IsoForest*     model,      IsoForest*     model_new,
-                  ExtIsoForest*  ext_model,  ExtIsoForest*  ext_model_new,
-                  Imputer*       imputer,    Imputer*       imputer_new,
-                  TreesIndexer*  indexer,    TreesIndexer*  indexer_new,
-                  size_t *trees_take, size_t ntrees_take);
+void subset_model(const IsoForest*     model,      IsoForest*     model_new,
+                  const ExtIsoForest*  ext_model,  ExtIsoForest*  ext_model_new,
+                  const Imputer*       imputer,    Imputer*       imputer_new,
+                  const TreesIndexer*  indexer,    TreesIndexer*  indexer_new,
+                  const size_t *trees_take, size_t ntrees_take);
 
 /* serialize.cpp */
 [[noreturn]]
@@ -1917,8 +1930,7 @@ public:
     {
         if (this->handle) {
             int err = std::fclose(this->handle);
-            if (err)
-                fprintf(stderr, "Error: could not close file.\n");
+            if (err) print_errmsg("Error: could not close file.\n");
         }
         this->handle = NULL;
     }
@@ -1941,8 +1953,7 @@ public:
         {
             if (this->handle) {
                 int err = std::fclose(this->handle);
-                if (err)
-                    fprintf(stderr, "Error: could not close file.\n");
+                if (err) print_errmsg("Error: could not close file.\n");
             }
             this->handle = NULL;
         }
@@ -2312,28 +2323,125 @@ void add_range_penalty(TreesIndexer &model) noexcept;
 
 /* sql.cpp */
 ISOTREE_EXPORTED
-std::vector<std::string> generate_sql(IsoForest *model_outputs, ExtIsoForest *model_outputs_ext,
-                                      std::vector<std::string> &numeric_colnames, std::vector<std::string> &categ_colnames,
-                                      std::vector<std::vector<std::string>> &categ_levels,
+std::string generate_sql_with_select_from(const IsoForest *model_outputs, const ExtIsoForest *model_outputs_ext,
+                                          const std::string &table_from, const std::string &select_as,
+                                          const std::vector<std::string> &numeric_colnames,
+                                          const std::vector<std::string> &categ_colnames,
+                                          const std::vector<std::vector<std::string>> &categ_levels,
+                                          bool index1, int nthreads);
+ISOTREE_EXPORTED
+std::vector<std::string> generate_sql(const IsoForest *model_outputs, const ExtIsoForest *model_outputs_ext,
+                                      const std::vector<std::string> &numeric_colnames,
+                                      const std::vector<std::string> &categ_colnames,
+                                      const std::vector<std::vector<std::string>> &categ_levels,
                                       bool output_tree_num, bool index1, bool single_tree, size_t tree_num,
                                       int nthreads);
-ISOTREE_EXPORTED
-std::string generate_sql_with_select_from(IsoForest *model_outputs, ExtIsoForest *model_outputs_ext,
-                                          std::string &table_from, std::string &select_as,
-                                          std::vector<std::string> &numeric_colnames, std::vector<std::string> &categ_colnames,
-                                          std::vector<std::vector<std::string>> &categ_levels,
-                                          bool index1, int nthreads);
-void generate_tree_rules(std::vector<IsoTree> *trees, std::vector<IsoHPlane> *hplanes, bool output_score,
-                         size_t curr_ix, bool index1, std::string &prev_cond, std::vector<std::string> &node_rules,
+void generate_tree_rules(const std::vector<IsoTree> *trees, const std::vector<IsoHPlane> *hplanes, const bool output_score,
+                         const size_t curr_ix, const bool index1, const std::string &prev_cond,
+                         std::vector<std::string> &node_rules,
                          std::vector<std::string> &conditions_left, std::vector<std::string> &conditions_right,
                          const IsoForest *model_outputs, const ExtIsoForest *model_outputs_ext);
-void extract_cond_isotree(IsoForest &model, IsoTree &tree,
+void extract_cond_isotree(const IsoForest &model, const IsoTree &tree,
                           std::string &cond_left, std::string &cond_right,
-                          std::vector<std::string> &numeric_colnames, std::vector<std::string> &categ_colnames,
-                          std::vector<std::vector<std::string>> &categ_levels);
-void extract_cond_ext_isotree(ExtIsoForest &model, IsoHPlane &hplane,
+                          const std::vector<std::string> &numeric_colnames,
+                          const std::vector<std::string> &categ_colnames,
+                          const std::vector<std::vector<std::string>> &categ_levels);
+void extract_cond_ext_isotree(const ExtIsoForest &model, const IsoHPlane &hplane,
                               std::string &cond_left, std::string &cond_right,
-                              std::vector<std::string> &numeric_colnames, std::vector<std::string> &categ_colnames,
-                              std::vector<std::vector<std::string>> &categ_levels);
+                              const std::vector<std::string> &numeric_colnames,
+                              const std::vector<std::string> &categ_colnames,
+                              const std::vector<std::vector<std::string>> &categ_levels);
+
+/* formatted_exporters.cpp */
+ISOTREE_EXPORTED
+std::vector<std::string> generate_dot(const IsoForest *model_outputs,
+                                      const ExtIsoForest *model_outputs_ext,
+                                      const TreesIndexer *indexer,
+                                      const std::vector<std::string> &numeric_colnames,
+                                      const std::vector<std::string> &categ_colnames,
+                                      const std::vector<std::vector<std::string>> &categ_levels,
+                                      bool output_tree_num, bool index1, bool single_tree, size_t tree_num,
+                                      int nthreads);
+std::string generate_dot_single_tree(const IsoForest *model_outputs,
+                                     const ExtIsoForest *model_outputs_ext,
+                                     const TreesIndexer *indexer,
+                                     const std::vector<std::string> &numeric_colnames,
+                                     const std::vector<std::string> &categ_colnames,
+                                     const std::vector<std::vector<std::string>> &categ_levels,
+                                     bool output_tree_num, bool index1, size_t tree_num);
+void get_tree_mappings
+(
+    const size_t *restrict &terminal_node_mappings,
+    std::unique_ptr<size_t[]> &terminal_node_mappings_holder,
+    const IsoForest *model_outputs,
+    const ExtIsoForest *model_outputs_ext,
+    const TreesIndexer *indexer,
+    size_t tree_num
+);
+void escape_strings
+(
+    const std::vector<std::string> &numeric_colnames,
+    const std::vector<std::string> &categ_colnames,
+    const std::vector<std::vector<std::string>> &categ_levels,
+    std::vector<std::string> &numeric_colnames_out,
+    std::vector<std::string> &categ_colnames_out,
+    std::vector<std::vector<std::string>> &categ_levels_out
+);
+void traverse_isoforest_graphviz
+(
+    std::string &curr_labels, size_t curr_node,
+    const IsoForest &model, const std::vector<IsoTree> &nodes,
+    const size_t *restrict terminal_node_mappings,
+    const std::vector<std::string> &numeric_colnames,
+    const std::vector<std::string> &categ_colnames,
+    const std::vector<std::vector<std::string>> &categ_levels,
+    bool output_tree_num, bool index1, size_t tree_num
+);
+void traverse_ext_graphviz
+(
+    std::string &curr_labels, size_t curr_node,
+    const ExtIsoForest &model, const std::vector<IsoHPlane> &nodes,
+    const size_t *restrict terminal_node_mappings,
+    const std::vector<std::string> &numeric_colnames,
+    const std::vector<std::string> &categ_colnames,
+    const std::vector<std::vector<std::string>> &categ_levels,
+    bool output_tree_num, bool index1, size_t tree_num
+);
+ISOTREE_EXPORTED
+std::vector<std::string> generate_json(const IsoForest *model_outputs,
+                                       const ExtIsoForest *model_outputs_ext,
+                                       const TreesIndexer *indexer,
+                                       const std::vector<std::string> &numeric_colnames,
+                                       const std::vector<std::string> &categ_colnames,
+                                       const std::vector<std::vector<std::string>> &categ_levels,
+                                       bool output_tree_num, bool index1, bool single_tree, size_t tree_num,
+                                       int nthreads);
+std::string generate_json_single_tree(const IsoForest *model_outputs,
+                                      const ExtIsoForest *model_outputs_ext,
+                                      const TreesIndexer *indexer,
+                                      const std::vector<std::string> &numeric_colnames,
+                                      const std::vector<std::string> &categ_colnames,
+                                      const std::vector<std::vector<std::string>> &categ_levels,
+                                      bool output_tree_num, bool index1, size_t tree_num);
+void traverse_isoforest_json
+(
+    std::string &curr_json, size_t curr_node,
+    const IsoForest &model, const std::vector<IsoTree> &nodes,
+    const size_t *restrict terminal_node_mappings,
+    const std::vector<std::string> &numeric_colnames,
+    const std::vector<std::string> &categ_colnames,
+    const std::vector<std::vector<std::string>> &categ_levels,
+    bool output_tree_num, bool index1, size_t tree_num
+);
+void traverse_ext_json
+(
+    std::string &curr_json, size_t curr_node,
+    const ExtIsoForest &model, const std::vector<IsoHPlane> &nodes,
+    const size_t *restrict terminal_node_mappings,
+    const std::vector<std::string> &numeric_colnames,
+    const std::vector<std::string> &categ_colnames,
+    const std::vector<std::vector<std::string>> &categ_levels,
+    bool output_tree_num, bool index1, size_t tree_num
+);
 
 #endif /* ISOTREE_H */
