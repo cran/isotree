@@ -1,4 +1,5 @@
 #' @importFrom parallel detectCores
+#' @importFrom RhpcBLASctl get_num_cores
 #' @importFrom stats predict variable.names
 #' @importFrom utils head
 #' @importFrom methods new
@@ -390,6 +391,9 @@
 #' \itemize{
 #'   \item `"divide"` (for the single-variable model only, recommended), which will follow both branches and combine
 #'   the result with the weight given by the fraction of the data that went to each branch when fitting the model.
+#'   The weights are determined during fitting by producing a split based on the non-missing values only, and calculating which
+#'   fraction of the non-missing values go to each branch (missing values are then sent to both branches with
+#'   those weights to continue the fitting procedure).
 #'   \item `"impute"`, which will assign observations to the branch with the most observations in the single-variable model,
 #'   or fill in missing values with the median of each column of the sample from which the split was made in the extended
 #'   model (recommended for it) (but note that the calculation of medians does not take
@@ -1626,11 +1630,11 @@ isolation.forest <- function(data,
 predict.isolation_forest <- function(
     object,
     newdata,
-    type="score",
-    square_mat=ifelse(type == "kernel", TRUE, FALSE),
-    refdata=NULL,
-    use_reference_points=TRUE,
-    nthreads=object$nthreads,
+    type = "score",
+    square_mat = ifelse(type == "kernel", TRUE, FALSE),
+    refdata = NULL,
+    use_reference_points = TRUE,
+    nthreads = min(object$nthreads, RhpcBLASctl::get_num_cores()),
     ...
 ) {
     isotree.restore.handle(object)
@@ -2642,6 +2646,9 @@ isotree.to.sql <- function(model, enclose="doublequotes", output_tree_num = FALS
     }
 }
 
+# TODO: this example gets flagged at CRAN checks due to a bug in GCC:
+# https://gcc.gnu.org/bugzilla/show_bug.cgi?id=118113
+# Should re-enable these examples once the bug gets solved an CRAN updates their compiler version.
 #' @title Generate GraphViz Dot Representation of Tree
 #' @description Generate GraphViz representations of model trees in 'dot' format - either
 #' separately per tree (the default), or for a single tree if needed (if passing `tree`)
@@ -2674,6 +2681,7 @@ isotree.to.sql <- function(model, enclose="doublequotes", output_tree_num = FALS
 #' of the tree. If passing `tree`, the output will be instead a single character / string element
 #' with the 'dot' representation for that tree.
 #' @examples
+#' \dontrun{
 #' library(isotree)
 #' set.seed(123)
 #' X <- matrix(rnorm(100 * 3), nrow = 100)
@@ -2687,6 +2695,7 @@ isotree.to.sql <- function(model, enclose="doublequotes", output_tree_num = FALS
 #' 
 #      second tree
 #'     DiagrammeR::grViz(model_as_graphviz[[1]])
+#' }
 #' }
 #' @export
 isotree.to.graphviz <- function(model, output_tree_num = FALSE, tree = NULL,

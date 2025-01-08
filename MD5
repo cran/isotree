@@ -1,9 +1,9 @@
-72a26a59c936a9d60f002218c54e709a *DESCRIPTION
+7a29fcd1f11ce115e0e09a54fa47d2cb *DESCRIPTION
 4af5782a3b1290824a22b4dc33cb4556 *LICENSE
 27212af107d760e4c42f41919d67612e *NAMESPACE
 69a9fdee3285b29030e33d21cc447c5f *R/RcppExports.R
-181878478caadc69aa75ed98ed62b862 *R/helpers.R
-e729c1e8f1d11a243e3e974f64198c3f *R/isoforest.R
+ce99db8065409809ce0a695d68e1092b *R/helpers.R
+03ed72a8020fbb268c41f9a3c42d59a0 *R/isoforest.R
 37eab2e3e43869c96a1b2869044e60a0 *R/legacy.R
 e50fb405694d92d6dc62a89bf18e86b6 *build/vignette.rds
 28781bb4b7d83b410e383e7a40330bbc *configure
@@ -11,9 +11,9 @@ e95ba9741bd2f677966d87682bef21eb *configure.ac
 d41d8cd98f00b204e9800998ecf8427e *configure.win
 08022b6c53dc3e7dfa5d225af8d10625 *inst/COPYRIGHTS
 14eb208c597f3eab5382ddb01fbe0e2d *inst/doc/An_Introduction_to_Isolation_Forests.R
-9a8ef6cc81021c030729b18a21ac14f4 *inst/doc/An_Introduction_to_Isolation_Forests.Rmd
-2b1487093a9fed1ebfaf02c1e19a2c70 *inst/doc/An_Introduction_to_Isolation_Forests.html
-680ab12e4e65826693ab98b05b6b5c9f *man/isolation.forest.Rd
+aaa406c985821a78391f946753b64387 *inst/doc/An_Introduction_to_Isolation_Forests.Rmd
+aa6239e5519accfec53d1ecbdc5e1787 *inst/doc/An_Introduction_to_Isolation_Forests.html
+ac3f249e6f1573ae0fc3689e67622f43 *man/isolation.forest.Rd
 6025d844c296da69fea0a8ebdbf2c378 *man/isotree.add.tree.Rd
 317459dbbd734233b0f1220919bde6dd *man/isotree.append.trees.Rd
 4ba9b61feb2bb1f042e79a46e0103d0e *man/isotree.build.indexer.Rd
@@ -30,11 +30,11 @@ b9761c99bdc0562df592a48c34569ecc *man/isotree.plot.tree.Rd
 9dbc8f594915b363586c6796fb5f8f06 *man/isotree.set.nthreads.Rd
 bc4ec80be85e30c980988f007dd34042 *man/isotree.set.reference.points.Rd
 4804df06e373807bfee1e63ecba62f1c *man/isotree.subset.trees.Rd
-9a9c4c9365ec318cc939a26dfc60b69c *man/isotree.to.graphviz.Rd
+5cd9e7ffe0c6708fe5546a88cb3e74ba *man/isotree.to.graphviz.Rd
 085af2460659ed0fdd50c15dd1201545 *man/isotree.to.json.Rd
 242003f6ee671032c4704f97a7467637 *man/isotree.to.sql.Rd
 980e7c4daf06168c18719dd9be929799 *man/length.isolation_forest.Rd
-5dcb80b33c86b2b7fb751d0dfdd4df77 *man/predict.isolation_forest.Rd
+f643c2d4456e06c136a5c1e5dcbabfc8 *man/predict.isolation_forest.Rd
 b872760b64e2ecff92b6a3bafd5c046d *man/print.isolation_forest.Rd
 320006a272c640da63c3b90f2d3d8369 *man/summary.isolation_forest.Rd
 b10bc1b1cfc78f7470a92f0d7db35d26 *man/variable.names.isolation_forest.Rd
@@ -73,4 +73,4 @@ f888fb556b548b4cd823e720c61dc65d *src/other_helpers.h
 ce17658c642a277c708f7bb85fd62952 *src/utils.h
 2a7c14d1c49e8defb31108579b5ad847 *src/xoshiro.h
 769df3ec6d6c73c8067705c62f99b10f *src/ziggurat.h
-9a8ef6cc81021c030729b18a21ac14f4 *vignettes/An_Introduction_to_Isolation_Forests.Rmd
+aaa406c985821a78391f946753b64387 *vignettes/An_Introduction_to_Isolation_Forests.Rmd
