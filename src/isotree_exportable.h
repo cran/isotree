@@ -62,21 +62,38 @@
 */
 #include "isotree.h"
 
-#include "crit.h"
-#include "dist.h"
-#include "extended.h"
-#include "fit_model.h"
-#include "helpers_iforest.h"
-#include "impute.h"
-#include "isoforest.h"
-#include "mult.h"
-#include "predict.h"
-#include "ref_indexer.h"
-#include "utils.h"
+#define real_t double
+#define sparse_ix int
+#include "external_facing_generic.h"
+#undef real_t
+#undef sparse_ix
 
-/*  Note: Cython also defines these in its auto-generated code, and leads to
-    conflicts if they are not undefined and then included again.  */
-#ifdef _FOR_PYTHON
-    #undef likely
-    #undef unlikely
-#endif
+#define real_t double
+#define sparse_ix int64_t
+#include "external_facing_generic.h"
+#undef real_t
+#undef sparse_ix
+
+#define real_t double
+#define sparse_ix size_t
+#include "external_facing_generic.h"
+#undef real_t
+#undef sparse_ix
+
+#define real_t float
+#define sparse_ix int
+#include "external_facing_generic.h"
+#undef real_t
+#undef sparse_ix
+
+#define real_t float
+#define sparse_ix int64_t
+#include "external_facing_generic.h"
+#undef real_t
+#undef sparse_ix
+
+#define real_t float
+#define sparse_ix size_t
+#include "external_facing_generic.h"
+#undef real_t
+#undef sparse_ix

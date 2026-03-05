@@ -1,6 +1,6 @@
 /*    Isolation forests and variations thereof, with adjustments for incorporation
 *     of categorical variables and missing values.
-*     Writen for C++11 standard and aimed at being used in R and Python.
+*     Written for C++11 standard and aimed at being used in R and Python.
 *     
 *     This library is based on the following works:
 *     [1] Liu, Fei Tony, Kai Ming Ting, and Zhi-Hua Zhou.
@@ -82,7 +82,7 @@
 #include "other_helpers.h"
 
 /*  Note: the R version calls the 'sort_csc_indices' templated function,
-    so it's not enough to just include 'isotree_exportable.hpp' and let
+    so it's not enough to just include 'isotree_exportable.h' and let
     the templates be instantiated elsewhere. */
 
 #define throw_mem_err() throw Rcpp::exception("Error: insufficient memory. Try smaller sample sizes and fewer trees.\n")
@@ -298,7 +298,7 @@ SEXP serialize_altrepped_pointer(SEXP altrepped_obj)
         return R_state;
     }
     catch (const std::exception &ex) {
-        Rf_error("%s\n", ex.what());
+        Rcpp::stop(ex.what());
     }
 
     return R_NilValue; /* <- won't be reached */
@@ -322,7 +322,7 @@ SEXP deserialize_altrepped_pointer(SEXP cls, SEXP R_state)
         model.release();
     }
     catch (const std::exception &ex) {
-        Rf_error("%s\n", ex.what());
+        Rcpp::stop(ex.what());
     }
 
     R_set_altrep_data1(out, R_ptr);
@@ -359,7 +359,7 @@ SEXP duplicate_altrepped_pointer(SEXP altrepped_obj, Rboolean deep)
         }
 
         catch (const std::exception &ex) {
-            Rf_error("%s\n", ex.what());
+           Rcpp::stop(ex.what());
         }
 
         R_set_altrep_data1(out, R_ptr);
@@ -2211,7 +2211,7 @@ void set_reference_points(Rcpp::List lst_cpp_objects, SEXP ptr_model, SEXP ind_R
     TreesIndexer *indexer_use = is_altrepped? indexer : new_indexer.get();
 
     /* Note: if using an altrepped pointer, the indexer is modified in-place. If that fails,
-    it will end up overwitten, with the previous references taken away. OTOH, if using
+    it will end up overwritten, with the previous references taken away. OTOH, if using
     a pointer + serialized, and it fails, it should not overwrite anything, and thus
     should not re-assign here immediately. */
     if (is_altrepped) {

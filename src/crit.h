@@ -1,6 +1,6 @@
 /*    Isolation forests and variations thereof, with adjustments for incorporation
 *     of categorical variables and missing values.
-*     Writen for C++11 standard and aimed at being used in R and Python.
+*     Written for C++11 standard and aimed at being used in R and Python.
 *     
 *     This library is based on the following works:
 *     [1] Liu, Fei Tony, Kai Ming Ting, and Zhi-Hua Zhou.
@@ -1209,7 +1209,7 @@ double categ_gain(number cnt_left, number cnt_right,
     If one is aiming at maximizing the pooled gain, it's possible to
     simplify either the gain or the increase in gain without involving
     'ssq'. Assuming one already has 'ssq' and 's' calculated for the left and
-    right partitions, and one wants to move one ovservation from right to left,
+    right partitions, and one wants to move one observation from right to left,
     the following hold:
         s_right = s - s_left
         ssq_right = ssq - ssq_left
@@ -1684,7 +1684,6 @@ double find_split_std_gain_weighted(real_t *restrict x, real_t xmean, size_t ix_
     return best_gain;
 }
 
-
 #ifndef _FOR_R
 [[gnu::optimize("Ofast")]]
 #endif
@@ -1716,7 +1715,6 @@ static inline void axpy1(const double a, double *restrict xval, size_t ind[], si
 {
     for (size_t ix = 0; ix < nnz; ix++) y[ind[ix]] = std::fma(a, xval[ix], y[ind[ix]]);
 }
-
 
 template <class real_t, class ldouble_safe>
 double find_split_full_gain(real_t *restrict x, size_t st, size_t end, size_t *restrict ix_arr,

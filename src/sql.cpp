@@ -1,6 +1,6 @@
 /*    Isolation forests and variations thereof, with adjustments for incorporation
 *     of categorical variables and missing values.
-*     Writen for C++11 standard and aimed at being used in R and Python.
+*     Written for C++11 standard and aimed at being used in R and Python.
 *     
 *     This library is based on the following works:
 *     [1] Liu, Fei Tony, Kai Ming Ting, and Zhi-Hua Zhou.
@@ -121,26 +121,25 @@ std::string generate_sql_with_select_from(const IsoForest *model_outputs, const 
     bool is_bratio  = (model_outputs != NULL && model_outputs->scoring_metric == BoxedRatio) ||
                       (model_outputs_ext != NULL && model_outputs_ext->scoring_metric == BoxedRatio);
     is_density = is_density || is_bdens2;
-    std::string out = std::accumulate(tree_conds.begin(), tree_conds.end(),
-                                      is_density?
-                                          std::string("SELECT\n(-(0.0")
-                                          :
-                                          (is_bdens?
-                                               std::string("SELECT\n((0.0")
-                                               :
-                                               (is_bratio?
-                                                    std::string("SELECT\n((0.0")
-                                                    :
-                                                    std::string("SELECT\nPOWER(2.0, -(0.0"))),
-                                      [&tree_conds, &index1](std::string &a, std::string &b)
-                                      {return a
-                                                + " + \n---BEGIN TREE "
-                                                + std::to_string((size_t)std::distance(tree_conds.data(), &b) + (size_t)index1)
-                                                + "---\n"
-                                                + b
-                                                + "\n---END OF TREE "
-                                                + std::to_string((size_t)std::distance(tree_conds.data(), &b) + (size_t)index1)
-                                                + "---\n";});
+    std::string out = is_density?
+                      std::string("SELECT\n(-(0.0")
+                      :
+                      (is_bdens?
+                           std::string("SELECT\n((0.0")
+                           :
+                           (is_bratio?
+                                std::string("SELECT\n((0.0")
+                                :
+                                std::string("SELECT\nPOWER(2.0, -(0.0")));
+    for (size_t ix = 0; ix < tree_conds.size(); ix++) {
+        out +=  " + \n---BEGIN TREE "
+                + std::to_string(ix + (size_t)index1)
+                + "---\n"
+                + tree_conds[ix]
+                + "\n---END OF TREE "
+                + std::to_string(ix + (size_t)index1)
+                + "---\n";
+    }
     size_t ntrees = (model_outputs != NULL)? (model_outputs->trees.size()) : (model_outputs_ext->hplanes.size());
     return
        out
@@ -285,15 +284,15 @@ std::vector<std::string> generate_sql(const IsoForest *model_outputs, const ExtI
                             + " ";
             }
 
-            out[tree_use] = std::accumulate(all_node_rules[tree_use].begin(), all_node_rules[tree_use].end(),
-                                            std::string("CASE\n"),
-                                            [&all_node_rules, &tree_use, &index1](std::string &a, std::string &b)
-                                            {return a
-                                                        + "---begin terminal node "
-                                                        + std::to_string((size_t)std::distance(&(all_node_rules[tree_use][0]), &b) + (size_t)index1)
-                                                        + "---\n"
-                                                    + b;})
-                            + "END\n";
+            std::string str_tree = std::string("CASE\n");
+            for (size_t ix = 0; ix < all_node_rules[tree_use].size(); ix++) {
+                str_tree += "---begin terminal node "
+                            + std::to_string(ix + (size_t)index1)
+                            + "---\n"
+                            + all_node_rules[tree_use][ix];
+            }
+            str_tree += "END\n";
+            out[tree_use] = str_tree;
             all_node_rules[tree_use].clear();
         }
 

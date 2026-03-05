@@ -1,6 +1,6 @@
 /*    Isolation forests and variations thereof, with adjustments for incorporation
 *     of categorical variables and missing values.
-*     Writen for C++11 standard and aimed at being used in R and Python.
+*     Written for C++11 standard and aimed at being used in R and Python.
 *     
 *     This library is based on the following works:
 *     [1] Liu, Fei Tony, Kai Ming Ting, and Zhi-Hua Zhou.
@@ -249,7 +249,8 @@ using std::memcpy;
 #endif
 
 #if defined(_FOR_R) || defined(_FOR_PYTHON)
-    #define ISOTREE_EXPORTED 
+    #define ISOTREE_EXPORTED
+    #define ISOTREE_EXPORTED_FRIEND
 #else
     #if defined(_WIN32)
         #ifdef ISOTREE_COMPILE_TIME
@@ -257,12 +258,14 @@ using std::memcpy;
         #else
             #define ISOTREE_EXPORTED __declspec(dllimport)
         #endif
+        #define ISOTREE_EXPORTED_FRIEND ISOTREE_EXPORTED
     #else
         #if defined(EXPLICITLTY_EXPORT_SYMBOLS) && defined(ISOTREE_COMPILE_TIME)
             #define ISOTREE_EXPORTED [[gnu::visibility("default")]]
         #else
             #define ISOTREE_EXPORTED 
         #endif
+        #define ISOTREE_EXPORTED_FRIEND
     #endif
 #endif
 
@@ -727,7 +730,7 @@ class SingleNodeColumnSampler
 {
 public:
     double *restrict weights_orig;
-    std::vector<bool> inifinite_weights;
+    std::vector<bool> infinite_weights;
     ldouble_safe cumw;
     size_t n_inf;
     size_t *restrict col_indices;
@@ -1877,7 +1880,7 @@ ISOTREE_EXPORTED
 size_t get_number_of_reference_points(const TreesIndexer &indexer) noexcept;
 void build_ref_node(SingleTreeIndex &node);
 
-/* ref_indexer.hpp */
+/* ref_indexer.h */
 template <class Model, class real_t, class sparse_ix>
 void set_reference_points(TreesIndexer &indexer, Model &model, const bool with_distances,
                           real_t *restrict numeric_data, int *restrict categ_data,
